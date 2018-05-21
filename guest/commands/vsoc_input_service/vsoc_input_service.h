@@ -1,3 +1,4 @@
+#pragma once
 /*
  * Copyright (C) 2017 The Android Open Source Project
  *
@@ -13,20 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#define AUDIO_DEBUG 0
+#include <memory>
 
-#if AUDIO_DEBUG
-#  define D(...) ALOGD(__VA_ARGS__)
-#else
-#  define D(...) ((void)0)
-#endif
+#include "virtual_keyboard.h"
+#include "virtual_power_button.h"
+#include "virtual_touchscreen.h"
 
-#include <errno.h>
-#include <string.h>
-#include <cutils/log.h>
+namespace vsoc_input_service {
 
-#include <hardware/hardware.h>
-#include <system/audio.h>
-#include <hardware/audio.h>
+class VSoCInputService {
+ public:
+  bool SetUpDevices();
+  bool ProcessEvents();
+
+ private:
+  std::shared_ptr<VirtualPowerButton> virtual_power_button_;
+  std::shared_ptr<VirtualKeyboard> virtual_keyboard_;
+  std::shared_ptr<VirtualTouchScreen> virtual_touchscreen_;
+};
+
+}  // namespace vsoc_input_service

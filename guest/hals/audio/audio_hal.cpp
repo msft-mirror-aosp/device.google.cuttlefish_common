@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2016 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "guest/commands/audio/vsoc_audio.h"
+#include "guest/hals/audio/vsoc_audio.h"
 
-#include "guest/commands/audio/audio_hal.h"
+#include "guest/hals/audio/audio_hal.h"
 #include "guest/libs/platform_support/api_level_fixes.h"
 
 static hw_module_methods_t hal_module_methods = {

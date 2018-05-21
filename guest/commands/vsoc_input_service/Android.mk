@@ -1,4 +1,4 @@
-# Copyright (C) 2016 The Android Open Source Project
+# Copyright (C) 2017 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,33 +13,31 @@
 # limitations under the License.
 
 LOCAL_PATH := $(call my-dir)
-
 include $(CLEAR_VARS)
-
-ifeq (0, $(shell test $(PLATFORM_SDK_VERSION) -ge 21; echo $$?))
-LOCAL_MODULE_RELATIVE_PATH := hw
-else
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
-endif
+LOCAL_MODULE := vsoc_input_service
 LOCAL_MODULE_TAGS := optional
-LOCAL_MULTILIB := first
-
-LOCAL_SHARED_LIBRARIES := \
-    liblog \
-    libcutils
-
 LOCAL_SRC_FILES := \
-    vsoc_audio_policy_hal.cpp
+    virtual_device_base.cpp \
+    virtual_power_button.cpp \
+    virtual_keyboard.cpp \
+    virtual_touchscreen.cpp \
+    vsoc_input_service.cpp \
+    main.cpp
 
 LOCAL_C_INCLUDES := \
     device/google/cuttlefish_common \
-    $(VSOC_STLPORT_INCLUDES) \
-    frameworks/native/include/media/hardware \
-    $(call include-path-for, audio)
+    device/google/cuttlefish_kernel
 
-LOCAL_CFLAGS := -Wall -DLOG_TAG=\"VSoC-AudioPolicy\"
+LOCAL_SHARED_LIBRARIES := \
+    cuttlefish_auto_resources \
+    libcuttlefish_fs \
+    libbase \
+    liblog \
+    vsoc_lib
 
-LOCAL_MODULE := audio_policy.vsoc
+LOCAL_CFLAGS += -DLOG_TAG=\"VSoCInputService\" \
+    -Wall -Werror
+
+LOCAL_MULTILIB := first
 LOCAL_VENDOR_MODULE := true
-
-include $(BUILD_SHARED_LIBRARY)
+include $(BUILD_EXECUTABLE)

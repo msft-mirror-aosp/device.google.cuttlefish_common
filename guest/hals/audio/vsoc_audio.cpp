@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2016 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "guest/commands/audio/audio_hal.h"
+#include "guest/hals/audio/audio_hal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,9 +28,9 @@ extern "C" {
 #include "common/libs/fs/shared_select.h"
 #include "common/libs/threads/cuttlefish_thread.h"
 #include "common/libs/threads/thunkers.h"
-#include "guest/commands/audio/vsoc_audio.h"
-#include "guest/commands/audio/vsoc_audio_input_stream.h"
-#include "guest/commands/audio/vsoc_audio_output_stream.h"
+#include "guest/hals/audio/vsoc_audio.h"
+#include "guest/hals/audio/vsoc_audio_input_stream.h"
+#include "guest/hals/audio/vsoc_audio_output_stream.h"
 #include "guest/libs/platform_support/api_level_fixes.h"
 #include "guest/libs/remoter/remoter_framework_pkt.h"
 
@@ -65,8 +65,7 @@ int GceAudio::Close() {
   }
   // Make certain that the listener thread wakes up
   cvd::SharedFD temp_client =
-      cvd::SharedFD::SocketSeqPacketClient(
-          gce_audio_message::kAudioHALSocketName);
+      cvd::SharedFD::SocketSeqPacketClient(AUDIO_HAL_SOCKET_NAME);
   uint64_t dummy_val = 1;
   terminate_listener_thread_event_->Write(&dummy_val, sizeof dummy_val);
   pthread_join(listener_thread_, NULL);
@@ -286,19 +285,19 @@ int GceAudio::SetMode(audio_mode_t mode) {
 void* GceAudio::Listener() {
   // TODO(ghartman): Consider tightening the mode on this later.
   audio_listener_socket_ = cvd::SharedFD::SocketSeqPacketServer(
-      gce_audio_message::kAudioHALSocketName, 0777);
+      AUDIO_HAL_SOCKET_NAME, 0777);
   if (!audio_listener_socket_->IsOpen()) {
     ALOGE("GceAudio::%s: Could not listen for audio connections. (%s).",
           __FUNCTION__, audio_listener_socket_->StrError());
     return NULL;
   }
   ALOGI("GceAudio::%s: Listening for audio connections at %s",
-        __FUNCTION__, gce_audio_message::kAudioHALSocketName);
+        __FUNCTION__, AUDIO_HAL_SOCKET_NAME);
   remoter_request_packet announce;
   remoter_request_packet_init(&announce, kRemoterHALReady, 0);
   announce.send_response = 0;
   strncpy(announce.params.hal_ready_params.unix_socket,
-          gce_audio_message::kAudioHALSocketName,
+          AUDIO_HAL_SOCKET_NAME,
           sizeof(announce.params.hal_ready_params.unix_socket));
   AutoCloseFileDescriptor remoter_socket(remoter_connect());
   if (remoter_socket.IsError()) {

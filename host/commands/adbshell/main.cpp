@@ -16,9 +16,12 @@
 
 /* Utility that uses an adb connection as the login shell. */
 
+#include "host/libs/config/cuttlefish_config.h"
+
 #include <array>
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -45,76 +48,33 @@
 //
 
 namespace {
-std::string InstanceNumberAsStr() {
-  static const char kUserPrefix[] = "cvd-";
+std::string VsocUser() {
+  const char* user_cstring = std::getenv("USER");
+  assert(user_cstring != nullptr);
+  std::string user(user_cstring);
 
-  std::string user{std::getenv("USER")};
-  return user.rfind(kUserPrefix, 0) == 0  // starts_with
-             ? user.substr(sizeof(kUserPrefix) - 1)
-             : "01";
-}
-
-int InstanceNumberAsInt() {
-  auto instance_str = InstanceNumberAsStr();
-  char* end{};
-  instance_str.push_back('\0');
-  auto result = static_cast<int>(std::strtol(&instance_str[0], &end, 10));
-  return *end || result < 1 ? 1 : result;
-}
-
-std::string TCPInstanceStr() {
-  static constexpr int kFirstPort = 6520;
-  const char kIPPrefix[] = "127.0.0.1:";
-
-  auto instance_port = InstanceNumberAsInt() - 1 + kFirstPort;
-  return std::string{kIPPrefix} + std::to_string(instance_port);
-}
-
-std::string USBInstanceStr() {
-  const char kSerialNumberPrefix[] = "CUTTLEFISHCVD";
-  std::string instance = InstanceNumberAsStr();
-  return std::string{kSerialNumberPrefix} + InstanceNumberAsStr();
-}
-
-std::string InstanceStr() {
-  std::string possible_device_names[] = {TCPInstanceStr(), USBInstanceStr()};
-
-  FILE* adb_devices_cmd_stream = popen("/usr/bin/adb devices", "r");
-  std::array<char, 128> line{};
-  while (fgets(line.data(), line.size(), adb_devices_cmd_stream) != nullptr) {
-    for (const auto& device_name : possible_device_names) {
-      if (std::string{line.data()}.find(device_name) != std::string::npos) {
-        return device_name;
-      }
-    }
+  std::string cvd_prefix = "cvd-";
+  if (user.find(cvd_prefix) == 0) {
+    user.replace(0, cvd_prefix.size(), vsoc::kVsocUserPrefix);
   }
-  return nullptr;
+  return user;
 }
 
-std::string VsocUserName() {
-  const char kVsocUserPrefix[] = "vsoc-";
-  auto num = InstanceNumberAsStr();
-  return std::string{kVsocUserPrefix} + num;
+std::string CuttlefishConfigLocation() {
+  return std::string("/home/") + VsocUser() +
+         "/cuttlefish_runtime/cuttlefish_config.json";
 }
 
-std::string VsocHomeAdbShellPath() {
-  return std::string{"/home/"} + VsocUserName() + "/bin/adbshell";
-}
-
-void TryExecHomeAdbShell(char* argv[]) {
-  auto home_shell = VsocHomeAdbShellPath();
-  if (access(home_shell.c_str(), X_OK) != -1 && home_shell != argv[0]) {
-    home_shell.push_back('\0');
-    argv[0] = &home_shell[0];
-    execv(argv[0], argv);
-    assert(0 && "execv() returned");
-  }
+void SetCuttlefishConfigEnv() {
+  setenv(vsoc::kCuttlefishConfigEnvVarName, CuttlefishConfigLocation().c_str(),
+         true);
 }
 }  // namespace
 
 int main(int argc, char* argv[]) {
-  TryExecHomeAdbShell(argv);
-  auto instance = InstanceStr();
+  SetCuttlefishConfigEnv();
+  auto instance = vsoc::CuttlefishConfig::Get()->adb_device_name();
+
   std::vector<char*> new_argv = {
       const_cast<char*>("/usr/bin/adb"), const_cast<char*>("-s"),
       const_cast<char*>(instance.c_str()), const_cast<char*>("shell"),

@@ -15,20 +15,22 @@
  */
 #pragma once
 
+#include <string>
+
 #include "host/libs/vm_manager/vm_manager.h"
 
 namespace vm_manager {
 
 class LibvirtManager : public VmManager {
  public:
-  LibvirtManager() = default;
+  static const std::string name();
+  static bool EnsureInstanceDirExists(const std::string& instance_dir);
+
+  LibvirtManager(const vsoc::CuttlefishConfig* config);
   virtual ~LibvirtManager() = default;
 
-  bool Start() const override;
-  bool Stop() const override;
-
-  bool EnsureInstanceDirExists() const override;
-  bool CleanPriorFiles() const override;
+  bool Start() override;
+  bool Stop() override;
 
   bool ValidateHostConfiguration(
       std::vector<std::string>* config_commands) const override;

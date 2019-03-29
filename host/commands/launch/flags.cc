@@ -88,6 +88,12 @@ DEFINE_string(instance_dir, "", // default handled on ParseCommandLine
 DEFINE_string(
     vm_manager, vm_manager::CrosvmManager::name(),
     "What virtual machine manager to use, one of {qemu_cli, crosvm}");
+DEFINE_string(
+    gpu_mode, vsoc::kGpuModeGuestAshmem,
+    "What gpu configuration to use, one of {guest_ashmem, guest_drm}");
+DEFINE_string(wayland_socket, "",
+    "Location of the wayland socket to use for *_drm gpu_modes.");
+
 DEFINE_string(system_image_dir, vsoc::DefaultGuestImagePath(""),
               "Location of the system partition images.");
 DEFINE_string(vendor_image, "", "Location of the vendor partition image.");
@@ -251,7 +257,18 @@ bool InitializeCuttlefishConfiguration(
     LOG(ERROR) << "Invalid vm_manager: " << FLAGS_vm_manager;
     return false;
   }
+  if (!vm_manager::VmManager::IsValidName(FLAGS_vm_manager)) {
+    LOG(ERROR) << "Invalid vm_manager: " << FLAGS_vm_manager;
+    return false;
+  }
   tmp_config_obj.set_vm_manager(FLAGS_vm_manager);
+  tmp_config_obj.set_gpu_mode(FLAGS_gpu_mode);
+  if (!vm_manager::VmManager::ConfigureGpuMode(&tmp_config_obj)) {
+    LOG(ERROR) << "Invalid gpu_mode=" << FLAGS_gpu_mode <<
+               " does not work with vm_manager=" << FLAGS_vm_manager;
+    return false;
+  }
+  tmp_config_obj.set_wayland_socket(FLAGS_wayland_socket);
 
   // TODO(b/77276633): This should be handled as part of the GPU configuration
   tmp_config_obj.add_kernel_cmdline("androidboot.hardware.egl=swiftshader");
@@ -525,6 +542,11 @@ void SetDefaultFlagsForCrosvm() {
       cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
   SetCommandLineOptionWithMode("instance_dir",
                                default_instance_dir.c_str(),
+                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  auto default_wayland_socket = vsoc::DefaultEnvironmentPath(
+      "XDG_RUNTIME_DIR", default_instance_dir.c_str(), "wayland-0");
+  SetCommandLineOptionWithMode("wayland_socket",
+                               default_wayland_socket.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);

@@ -27,6 +27,7 @@ class QemuManager : public VmManager {
  public:
   static const std::string name();
   static void ConfigureBootDevices(vsoc::CuttlefishConfig* config);
+  static bool ConfigureGpu(vsoc::CuttlefishConfig *config);
 
   QemuManager(const vsoc::CuttlefishConfig* config);
   virtual ~QemuManager() = default;

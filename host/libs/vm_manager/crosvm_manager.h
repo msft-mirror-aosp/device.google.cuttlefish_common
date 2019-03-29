@@ -29,6 +29,7 @@ class CrosvmManager : public VmManager {
   static const std::string name();
   static bool EnsureInstanceDirExists(const std::string& instance_dir);
   static void ConfigureBootDevices(vsoc::CuttlefishConfig* config);
+  static bool ConfigureGpu(vsoc::CuttlefishConfig *config);
 
   CrosvmManager(const vsoc::CuttlefishConfig* config);
   virtual ~CrosvmManager() = default;

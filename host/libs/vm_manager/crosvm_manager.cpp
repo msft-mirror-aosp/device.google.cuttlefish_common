@@ -65,16 +65,18 @@ bool CrosvmManager::ConfigureGpu(vsoc::CuttlefishConfig* config) {
   // the HAL search path allows for fallbacks, and fallbacks in conjunction
   // with properities lead to non-deterministic behavior while loading the
   // HALs.
-  if (config->gpu_mode() == vsoc::kGpuModeGuestDrm) {
+  if (config->gpu_mode() == vsoc::kGpuModeDrmVirgl) {
     config->add_kernel_cmdline("androidboot.hardware.gralloc=minigbm");
     config->add_kernel_cmdline("androidboot.hardware.hwcomposer=drm_minigbm");
+    config->add_kernel_cmdline("androidboot.hardware.egl=mesa");
     return true;
   }
-  if (config->gpu_mode() == vsoc::kGpuModeGuestAshmem) {
+  if (config->gpu_mode() == vsoc::kGpuModeGuestSwiftshader) {
     config->add_kernel_cmdline(
         "androidboot.hardware.gralloc=cutf_ashmem");
     config->add_kernel_cmdline(
         "androidboot.hardware.hwcomposer=cutf_cvm_ashmem");
+    config->add_kernel_cmdline("androidboot.hardware.egl=swiftshader");
     return true;
   }
   return false;
@@ -98,7 +100,7 @@ cvd::Command CrosvmManager::StartCommand() {
   if (!config_->ramdisk_image_path().empty()) {
     command.AddParameter("--initrd=", config_->ramdisk_image_path());
   }
-  if (config_->gpu_mode() != vsoc::kGpuModeGuestAshmem) {
+  if (config_->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
     command.AddParameter("--gpu");
     command.AddParameter("--wayland-sock=", config_->wayland_socket());
   }

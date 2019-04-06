@@ -165,8 +165,8 @@ const char* kLogcatReceiverBinary = "logcat_receiver_binary";
 
 namespace vsoc {
 
-const char* const kGpuModeGuestAshmem = "guest_ashmem";
-const char* const kGpuModeGuestDrm = "guest_drm";
+const char* const kGpuModeGuestSwiftshader = "guest_swiftshader";
+const char* const kGpuModeDrmVirgl = "drm_virgl";
 
 std::string DefaultEnvironmentPath(const char* environment_key,
                                    const char* default_value,

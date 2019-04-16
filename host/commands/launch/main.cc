@@ -424,6 +424,8 @@ int main(int argc, char** argv) {
 
   LaunchLogcatReceiverIfEnabled(*config, &process_monitor);
 
+  LaunchConfigServer(*config, &process_monitor);
+
   LaunchUsbServerIfEnabled(*config, &process_monitor);
 
   LaunchIvServerIfEnabled(&process_monitor, *config);

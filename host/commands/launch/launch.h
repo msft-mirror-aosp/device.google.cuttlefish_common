@@ -35,3 +35,5 @@ void LaunchSocketVsockProxyIfEnabled(cvd::ProcessMonitor* process_monitor,
                                  const vsoc::CuttlefishConfig& config);
 void LaunchIvServerIfEnabled(cvd::ProcessMonitor* process_monitor,
                              const vsoc::CuttlefishConfig& config);
+void LaunchTombstoneReceiverIfEnabled(const vsoc::CuttlefishConfig& config,
+                                      cvd::ProcessMonitor* process_monitor);

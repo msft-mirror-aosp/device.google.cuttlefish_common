@@ -426,6 +426,8 @@ int main(int argc, char** argv) {
 
   LaunchConfigServer(*config, &process_monitor);
 
+  LaunchTombstoneReceiverIfEnabled(*config, &process_monitor);
+
   LaunchUsbServerIfEnabled(*config, &process_monitor);
 
   LaunchIvServerIfEnabled(&process_monitor, *config);

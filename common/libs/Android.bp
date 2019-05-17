@@ -15,10 +15,12 @@
 
 subdirs = [
     "auto_resources",
+    "device_config",
     "fs",
     "net",
     "strings",
     "tcp_socket",
     "threads",
     "time",
+    "utils",
 ]

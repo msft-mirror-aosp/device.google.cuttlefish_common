@@ -15,5 +15,7 @@
 
 subdirs = [
     "commands",
-    "hals/health",
+    "hals",
+    "monitoring",
+    "vsoc/lib",
 ]

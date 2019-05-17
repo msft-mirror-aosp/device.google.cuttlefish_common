@@ -36,27 +36,20 @@ std::string MakeMessage(const std::string& user_message) {
   return ss.str();
 }
 
-std::string MakeIPAndPort(int port) {
-  static constexpr char kLocalHostPrefix[] = "127.0.0.1:";
-  return kLocalHostPrefix + std::to_string(port);
-}
-
 std::string MakeShellUptimeMessage() {
   return MakeMessage("shell,raw:cut -d. -f1 /proc/uptime");
 }
 
-std::string MakeTransportMessage(int port) {
-  return MakeMessage("host:transport:" + MakeIPAndPort(port));
+std::string MakeTransportMessage(const std::string& address) {
+  return MakeMessage("host:transport:" + address);
 }
 
-std::string MakeConnectMessage(int port) {
-  static constexpr char kConnectPrefix[] = "host:connect:";
-  return MakeMessage(kConnectPrefix + MakeIPAndPort(port));
+std::string MakeConnectMessage(const std::string& address) {
+  return MakeMessage("host:connect:" + address);
 }
 
-std::string MakeDisconnectMessage(int port) {
-  static constexpr char kDisonnectPrefix[] = "host:disconnect:";
-  return MakeMessage(kDisonnectPrefix + MakeIPAndPort(port));
+std::string MakeDisconnectMessage(const std::string& address) {
+  return MakeMessage("host:connect:" + address);
 }
 
 // returns true if successfully sent the whole message
@@ -102,7 +95,6 @@ constexpr int kAdbDaemonPort = 5037;
 
 bool AdbSendMessage(cvd::SharedFD sock, const std::string& message) {
   if (!sock->IsOpen()) {
-    LOG(INFO) << "failed to connect to adb daemon";
     return false;
   }
   if (!SendAll(sock, message)) {
@@ -117,10 +109,12 @@ bool AdbSendMessage(const std::string& message) {
   return AdbSendMessage(sock, message);
 }
 
-bool AdbConnect(int port) { return AdbSendMessage(MakeConnectMessage(port)); }
+bool AdbConnect(const std::string& address) {
+  return AdbSendMessage(MakeConnectMessage(address));
+}
 
-bool AdbDisconnect(int port) {
-  return AdbSendMessage(MakeDisconnectMessage(port));
+bool AdbDisconnect(const std::string& address) {
+  return AdbSendMessage(MakeDisconnectMessage(address));
 }
 
 bool IsInteger(const std::string& str) {
@@ -174,25 +168,22 @@ int RecvUptimeResult(cvd::SharedFD sock) {
 // seconds is much larger than seems necessary so we should be more than okay.
 static constexpr int kAdbCommandGapTime = 5;
 
-void EstablishConnection(int port) {
-  while (true) {
-    LOG(INFO) << "Attempting to connect to device on port " << port;
-    if (AdbConnect(port)) {
-      LOG(DEBUG) << "adb connect message for " << port << " successfully sent";
-      break;
-    }
+void EstablishConnection(const std::string& address) {
+  LOG(INFO) << "Attempting to connect to device with address " << address;
+  while (!AdbConnect(address)) {
     sleep(kAdbCommandGapTime);
   }
+  LOG(INFO) << "adb connect message for " << address << " successfully sent";
   sleep(kAdbCommandGapTime);
 }
 
-void WaitForAdbDisconnection(int port) {
+void WaitForAdbDisconnection(const std::string& address) {
   // adb daemon doesn't seem to handle quick, successive messages well. The
   // sleeps stabilize the communication.
-  LOG(INFO) << "Watching for disconnect on port " << port;
+  LOG(INFO) << "Watching for disconnect on " << address;
   while (true) {
     auto sock = cvd::SharedFD::SocketLocalClient(kAdbDaemonPort, SOCK_STREAM);
-    if (!AdbSendMessage(sock, MakeTransportMessage(port))) {
+    if (!AdbSendMessage(sock, MakeTransportMessage(address))) {
       LOG(INFO) << "transport message failed, response body: "
                 << RecvAdbResponse(sock);
       break;
@@ -207,19 +198,19 @@ void WaitForAdbDisconnection(int port) {
       LOG(INFO) << "couldn't read uptime result";
       break;
     }
-    LOG(DEBUG) << "device on port " << port << " uptime " << uptime;
+    LOG(DEBUG) << "device on " << address << " uptime " << uptime;
     sleep(kAdbCommandGapTime);
   }
   LOG(INFO) << "Sending adb disconnect";
-  AdbDisconnect(port);
+  AdbDisconnect(address);
   sleep(kAdbCommandGapTime);
 }
 
 }  // namespace
 
-[[noreturn]] void cvd::EstablishAndMaintainConnection(int port) {
+[[noreturn]] void cvd::EstablishAndMaintainConnection(std::string address) {
   while (true) {
-    EstablishConnection(port);
-    WaitForAdbDisconnection(port);
+    EstablishConnection(address);
+    WaitForAdbDisconnection(address);
   }
 }

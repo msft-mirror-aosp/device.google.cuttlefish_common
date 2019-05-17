@@ -26,10 +26,25 @@ cc_library_headers {
     host_supported: true,
 }
 
+cc_library_headers {
+    name: "cuttlefish_common_headers_product",
+    product_specific: true,
+    export_include_dirs: ["."],
+    host_supported: true,
+}
+
 // TODO(b/67435044) Update the include paths and remove this
 cc_library_headers {
     name: "cuttlefish_glog",
     vendor: true,
+    export_include_dirs: ["common/libs"],
+    host_supported: true,
+}
+
+// TODO(b/67435044) Update the include paths and remove this
+cc_library_headers {
+    name: "cuttlefish_glog_product",
+    product_specific: true,
     export_include_dirs: ["common/libs"],
     host_supported: true,
 }
@@ -40,6 +55,7 @@ cc_defaults {
     header_libs: [
         "cuttlefish_common_headers",
         "cuttlefish_kernel_headers",
+        "cuttlefish_shared_config",
     ],
     target: {
         host: {
@@ -56,17 +72,27 @@ cc_defaults {
     vendor: true,
 }
 
-// ARM code should not touch the VSoC window on an x86 CPU.
 cc_defaults {
-    name: "cuttlefish_native_isa",
+    name: "cuttlefish_guest_product_only",
+    product_specific: true,
+    gnu_extensions: false,
+    header_libs: [
+        "cuttlefish_common_headers_product",
+        "cuttlefish_kernel_headers_product",
+        "cuttlefish_shared_config_product",
+    ],
     target: {
-        android_arm: {
-            enabled: false,
+        host: {
+            host_ldlibs: ["-lrt"],
+            cflags: ["-DCUTTLEFISH_HOST"],
+            compile_multilib: "64",
         },
-        android_arm64: {
+        // We don't need Darwin host-side builds
+        darwin: {
             enabled: false,
         },
     },
+    cflags: ["-Werror", "-Wall"],
 }
 
 cc_defaults {
@@ -97,16 +123,13 @@ cc_library_shared {
         "common/vsoc/lib/input_events_layout.cpp",
         "common/vsoc/lib/input_events_region_view.cpp",
         "common/vsoc/lib/lock_common.cpp",
+        "common/vsoc/lib/managed_e2e_test_region_layout.cpp",
         "common/vsoc/lib/region_view.cpp",
-        "common/vsoc/lib/ril_layout.cpp",
-        "common/vsoc/lib/ril_region_view.cpp",
         "common/vsoc/lib/screen_layout.cpp",
         "common/vsoc/lib/screen_region_view.cpp",
         "common/vsoc/lib/socket_forward_layout.cpp",
         "common/vsoc/lib/socket_forward_region_view.cpp",
         "common/vsoc/lib/vsoc_memory.cpp",
-        "common/vsoc/lib/wifi_exchange_layout.cpp",
-        "common/vsoc/lib/wifi_exchange_view.cpp",
     ],
     header_libs: ["cuttlefish_glog"],
     shared_libs: [
@@ -133,7 +156,7 @@ cc_library_shared {
             ],
         },
     },
-    defaults: ["cuttlefish_host_and_guest", "cuttlefish_native_isa"],
+    defaults: ["cuttlefish_host_and_guest"],
 }
 
 cc_test_host {
@@ -146,6 +169,7 @@ cc_test_host {
         "libbase",
     ],
     defaults: ["cuttlefish_host_only"],
+    test_suites: ["general-tests"],
 }
 
 cc_binary_host {
@@ -161,6 +185,7 @@ cc_binary_host {
     shared_libs: [
         "vsoc_lib",
         "libbase",
+        "libcuttlefish_utils",
     ],
     defaults: ["cuttlefish_host_only"],
 }
@@ -180,6 +205,7 @@ cc_test_host {
         "libgtest_host",
     ],
     defaults: ["cuttlefish_host_only"],
+    test_suites: ["general-tests"],
 }
 
 cc_test_host {
@@ -192,6 +218,7 @@ cc_test_host {
         "libbase",
     ],
     defaults: ["cuttlefish_host_only"],
+    test_suites: ["general-tests"],
 }
 
 cc_binary_host {
@@ -202,6 +229,7 @@ cc_binary_host {
     shared_libs: [
         "vsoc_lib",
         "libcuttlefish_fs",
+        "libcuttlefish_utils",
         "cuttlefish_auto_resources",
         "libbase",
     ],

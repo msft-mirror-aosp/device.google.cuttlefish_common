@@ -9,6 +9,9 @@
       "host": true
     },
     {
+      "name": "tombstone_transmit_tests"
+    },
+    {
       "name": "vsoc_graphics_test",
       "host": true
     }

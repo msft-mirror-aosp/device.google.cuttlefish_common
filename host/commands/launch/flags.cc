@@ -98,6 +98,7 @@ DEFINE_string(system_image_dir, vsoc::DefaultGuestImagePath(""),
 DEFINE_string(vendor_image, "", "Location of the vendor partition image.");
 DEFINE_string(product_image, "", "Location of the product partition image.");
 DEFINE_string(super_image, "", "Location of the super partition image.");
+DEFINE_string(composite_disk, "", "Location of the composite disk image.");
 
 DEFINE_bool(deprecated_boot_completed, false, "Log boot completed message to"
             " host kernel. This is only used during transition of our clients."
@@ -334,17 +335,40 @@ bool InitializeCuttlefishConfiguration(
     if (use_ramdisk) {
       FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/initrd-root.dtb");
     } else {
-      FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/system-root.dtb");
+      if (FLAGS_composite_disk.empty()) {
+        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/system-root.dtb");
+      } else {
+        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/composite-system-root.dtb");
+      }
     }
   }
 
   tmp_config_obj.add_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
-  if (!use_ramdisk) {
-    tmp_config_obj.add_kernel_cmdline("root=/dev/vda");
+
+  if (use_ramdisk) {
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
+    }
+  } else {
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("root=/dev/vda");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("root=/dev/vda1");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
+    }
   }
+
   if (!FLAGS_super_image.empty()) {
-    tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=vda");
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=vda");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=super");
+    }
   }
+
   tmp_config_obj.add_kernel_cmdline("init=/init");
   tmp_config_obj.add_kernel_cmdline(
       concat("androidboot.serialno=", FLAGS_serial_number));
@@ -412,6 +436,8 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_cache_image_path(FLAGS_cache_image);
   tmp_config_obj.set_data_image_path(FLAGS_data_image);
   tmp_config_obj.set_metadata_image_path(FLAGS_metadata_image);
+  tmp_config_obj.set_boot_image_path(FLAGS_boot_image);
+  tmp_config_obj.set_composite_disk_path(FLAGS_composite_disk);
 
   tmp_config_obj.set_mempath(FLAGS_mempath);
   tmp_config_obj.set_ivshmem_qemu_socket_path(
@@ -580,6 +606,13 @@ void SetDefaultFlagsForCrosvm() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
+
+  if (!FLAGS_composite_disk.empty()) {
+    std::string composite_gsi_fstab =
+        vsoc::DefaultHostArtifactsPath("config/composite-gsi.fstab");
+    SetCommandLineOptionWithMode("gsi_fstab", composite_gsi_fstab.c_str(),
+                                 google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  }
 }
 
 bool ParseCommandLineFlags(int* argc, char*** argv) {
@@ -713,14 +746,16 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
     exit(cvd::kCuttlefishConfigurationInitError);
   }
 
-  CreateBlankImage(FLAGS_metadata_image, FLAGS_blank_metadata_image_mb, "none");
+  if (!cvd::FileExists(FLAGS_metadata_image)) {
+    CreateBlankImage(FLAGS_metadata_image, FLAGS_blank_metadata_image_mb, "none");
+  }
 
   // Check that the files exist
   for (const auto& file :
        {config->system_image_path(), config->cache_image_path(),
         config->data_image_path(), config->vendor_image_path(),
         config->metadata_image_path(),  config->product_image_path(),
-        config->super_image_path()}) {
+        config->super_image_path(), config->boot_image_path()}) {
     if (!file.empty() && !cvd::FileHasContent(file.c_str())) {
       LOG(ERROR) << "File not found: " << file;
       exit(cvd::kCuttlefishConfigurationInitError);

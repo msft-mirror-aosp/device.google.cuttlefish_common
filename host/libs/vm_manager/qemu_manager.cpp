@@ -37,7 +37,6 @@
 #include "common/libs/utils/subprocess.h"
 #include "common/libs/utils/users.h"
 #include "host/libs/config/cuttlefish_config.h"
-#include "host/libs/vm_manager/disk_config.h"
 
 namespace vm_manager {
 
@@ -82,6 +81,21 @@ bool Stop() {
   return true;
 }
 
+std::string JoinString(const std::vector<std::string>& args,
+                       const std::string& delim) {
+  bool first = true;
+  std::stringstream output;
+  for (const auto& arg : args) {
+    if (first) {
+      first = false;
+    } else {
+      output << delim;
+    }
+    output << arg;
+  }
+  return output.str();
+}
+
 }  // namespace
 
 const std::string QemuManager::name() { return "qemu_cli"; }
@@ -112,10 +126,6 @@ QemuManager::QemuManager(const vsoc::CuttlefishConfig* config)
   : VmManager(config) {}
 
 std::vector<cvd::Command> QemuManager::StartCommands(bool /*with_frontend*/) {
-  if (should_create_composite_disk(*config_)) {
-    create_composite_disk(*config_);
-  }
-
   // Set the config values in the environment
   LogAndSetEnv("qemu_binary", config_->qemu_binary());
   LogAndSetEnv("instance_name", config_->instance_name());
@@ -128,14 +138,8 @@ std::vector<cvd::Command> QemuManager::StartCommands(bool /*with_frontend*/) {
   LogAndSetEnv("ramdisk_image_path", config_->ramdisk_image_path());
   LogAndSetEnv("kernel_cmdline", config_->kernel_cmdline_as_string());
   LogAndSetEnv("dtb_path", config_->dtb_path());
-  LogAndSetEnv("system_image_path", config_->system_image_path());
-  LogAndSetEnv("data_image_path", config_->data_image_path());
-  LogAndSetEnv("cache_image_path", config_->cache_image_path());
-  LogAndSetEnv("vendor_image_path", config_->vendor_image_path());
-  LogAndSetEnv("metadata_image_path", config_->metadata_image_path());
-  LogAndSetEnv("product_image_path", config_->product_image_path());
-  LogAndSetEnv("super_image_path", config_->super_image_path());
-  LogAndSetEnv("composite_disk_path", config_->composite_disk_path());
+  LogAndSetEnv("virtual_disk_paths", JoinString(config_->virtual_disk_paths(),
+                                                ";"));
   LogAndSetEnv("wifi_tap_name", config_->wifi_tap_name());
   LogAndSetEnv("mobile_tap_name", config_->mobile_tap_name());
   LogAndSetEnv("kernel_log_pipe_name",

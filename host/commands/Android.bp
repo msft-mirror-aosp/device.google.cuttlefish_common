@@ -22,4 +22,5 @@ subdirs = [
     "virtual_usb_manager",
     "kernel_log_monitor",
     "config_server",
+    "console_forwarder",
 ]

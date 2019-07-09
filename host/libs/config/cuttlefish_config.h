@@ -29,6 +29,15 @@ constexpr char kDefaultUuidPrefix[] = "699acfc4-c8c4-11e7-882b-5065f31dc1";
 constexpr char kCuttlefishConfigEnvVarName[] = "CUTTLEFISH_CONFIG_FILE";
 constexpr char kVsocUserPrefix[] = "vsoc-";
 
+enum class AdbMode {
+  Tunnel,
+  VsockTunnel,
+  VsockHalfTunnel,
+  NativeVsock,
+  Usb,
+  Unknown,
+};
+
 // Holds the configuration of the cuttlefish instances.
 class CuttlefishConfig {
  public:
@@ -126,26 +135,8 @@ class CuttlefishConfig {
   std::string ramdisk_image_path() const;
   void set_ramdisk_image_path(const std::string& ramdisk_image_path);
 
-  std::string system_image_path() const;
-  void set_system_image_path(const std::string& system_image_path);
-
-  std::string cache_image_path() const;
-  void set_cache_image_path(const std::string& cache_image_path);
-
-  std::string data_image_path() const;
-  void set_data_image_path(const std::string& data_image_path);
-
-  std::string vendor_image_path() const;
-  void set_vendor_image_path(const std::string& vendor_image_path);
-
-  std::string metadata_image_path() const;
-  void set_metadata_image_path(const std::string& metadata_image_path);
-
-  std::string product_image_path() const;
-  void set_product_image_path(const std::string& product_image_path);
-
-  std::string super_image_path() const;
-  void set_super_image_path(const std::string& super_image_path);
+  std::vector<std::string> virtual_disk_paths() const;
+  void set_virtual_disk_paths(const std::vector<std::string>& disk_paths);
 
   std::string dtb_path() const;
   void set_dtb_path(const std::string& dtb_path);
@@ -178,8 +169,8 @@ class CuttlefishConfig {
   std::string usb_ip_socket_name() const;
   void set_usb_ip_socket_name(const std::string& usb_ip_socket_name);
 
-  std::string kernel_log_socket_name() const;
-  void set_kernel_log_socket_name(const std::string& kernel_log_socket_name);
+  std::string kernel_log_pipe_name() const;
+  void set_kernel_log_pipe_name(const std::string& kernel_log_pipe_name);
 
   bool deprecated_boot_completed() const;
   void set_deprecated_boot_completed(bool deprecated_boot_completed);
@@ -231,7 +222,7 @@ class CuttlefishConfig {
   std::string cuttlefish_env_path() const;
 
   void set_adb_mode(const std::set<std::string>& modes);
-  std::set<std::string> adb_mode() const;
+  std::set<AdbMode> adb_mode() const;
 
   void set_adb_ip_and_port(const std::string& ip_port);
   std::string adb_ip_and_port() const;
@@ -249,6 +240,9 @@ class CuttlefishConfig {
 
   void set_crosvm_binary(const std::string& crosvm_binary);
   std::string crosvm_binary() const;
+
+  void set_console_forwarder_binary(const std::string& crosvm_binary);
+  std::string console_forwarder_binary() const;
 
   void set_ivserver_binary(const std::string& ivserver_binary);
   std::string ivserver_binary() const;

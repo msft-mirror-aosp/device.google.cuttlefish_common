@@ -1,4 +1,9 @@
 {
+  "postsubmit" : [
+    {
+      "name": "tombstone_transmit_tests"
+    }
+  ],
   "presubmit": [
     {
       "name": "circqueue_test",
@@ -7,9 +12,6 @@
     {
       "name": "lock_test",
       "host": true
-    },
-    {
-      "name": "tombstone_transmit_tests"
     },
     {
       "name": "vsoc_graphics_test",

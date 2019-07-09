@@ -11,6 +11,7 @@
 #include "common/vsoc/lib/vsoc_memory.h"
 #include "host/commands/launch/boot_image_unpacker.h"
 #include "host/commands/launch/data_image.h"
+#include "host/commands/launch/image_aggregator.h"
 #include "host/commands/launch/launch.h"
 #include "host/commands/launch/launcher_defs.h"
 #include "host/libs/vm_manager/crosvm_manager.h"
@@ -49,7 +50,7 @@ DEFINE_int32(num_screen_buffers, 3, "The number of screen buffers");
 DEFINE_string(kernel_path, "",
               "Path to the kernel. Overrides the one from the boot image");
 DEFINE_bool(decompress_kernel, false,
-            "Whether to decompress the kernel image. Required for crosvm.");
+            "Whether to decompress the kernel image.");
 DEFINE_string(kernel_decompresser_executable,
               vsoc::DefaultHostArtifactsPath("bin/extract-vmlinux"),
              "Path to the extract-vmlinux executable.");
@@ -98,6 +99,7 @@ DEFINE_string(system_image_dir, vsoc::DefaultGuestImagePath(""),
 DEFINE_string(vendor_image, "", "Location of the vendor partition image.");
 DEFINE_string(product_image, "", "Location of the product partition image.");
 DEFINE_string(super_image, "", "Location of the super partition image.");
+DEFINE_string(composite_disk, "", "Location of the composite disk image.");
 
 DEFINE_bool(deprecated_boot_completed, false, "Log boot completed message to"
             " host kernel. This is only used during transition of our clients."
@@ -181,6 +183,9 @@ DEFINE_string(qemu_binary,
 DEFINE_string(crosvm_binary,
               vsoc::DefaultHostArtifactsPath("bin/crosvm"),
               "The Crosvm binary to use");
+DEFINE_string(console_forwarder_binary,
+              vsoc::DefaultHostArtifactsPath("bin/console_forwarder"),
+              "The Console Forwarder binary to use");
 DEFINE_bool(restart_subprocesses, true, "Restart any crashed host process");
 DEFINE_bool(run_e2e_test, true, "Run e2e test after device launches");
 DEFINE_string(e2e_test_binary,
@@ -334,17 +339,40 @@ bool InitializeCuttlefishConfiguration(
     if (use_ramdisk) {
       FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/initrd-root.dtb");
     } else {
-      FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/system-root.dtb");
+      if (FLAGS_composite_disk.empty()) {
+        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/system-root.dtb");
+      } else {
+        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/composite-system-root.dtb");
+      }
     }
   }
 
   tmp_config_obj.add_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
-  if (!use_ramdisk) {
-    tmp_config_obj.add_kernel_cmdline("root=/dev/vda");
+
+  if (use_ramdisk) {
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
+    }
+  } else {
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("root=/dev/vda");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("root=/dev/vda1");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
+    }
   }
+
   if (!FLAGS_super_image.empty()) {
-    tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=vda");
+    if (FLAGS_composite_disk.empty()) {
+      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=vda");
+    } else {
+      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=super");
+    }
   }
+
   tmp_config_obj.add_kernel_cmdline("init=/init");
   tmp_config_obj.add_kernel_cmdline(
       concat("androidboot.serialno=", FLAGS_serial_number));
@@ -393,25 +421,34 @@ bool InitializeCuttlefishConfiguration(
   }
 
   if (FLAGS_super_image.empty()) {
-    tmp_config_obj.set_system_image_path(FLAGS_system_image);
-    tmp_config_obj.set_vendor_image_path(FLAGS_vendor_image);
-    tmp_config_obj.set_product_image_path(FLAGS_product_image);
-    tmp_config_obj.set_super_image_path("");
     tmp_config_obj.set_dtb_path(FLAGS_dtb);
     tmp_config_obj.set_gsi_fstab_path(FLAGS_gsi_fstab);
   } else {
-    tmp_config_obj.set_system_image_path("");
-    tmp_config_obj.set_vendor_image_path("");
-    tmp_config_obj.set_product_image_path("");
-    tmp_config_obj.set_super_image_path(FLAGS_super_image);
     tmp_config_obj.set_dtb_path("");
     tmp_config_obj.set_gsi_fstab_path("");
   }
 
+  if (!FLAGS_composite_disk.empty()) {
+    tmp_config_obj.set_virtual_disk_paths({FLAGS_composite_disk});
+  } else if(!FLAGS_super_image.empty()) {
+    tmp_config_obj.set_virtual_disk_paths({
+      FLAGS_super_image,
+      FLAGS_data_image,
+      FLAGS_cache_image,
+      FLAGS_metadata_image,
+    });
+  } else {
+    tmp_config_obj.set_virtual_disk_paths({
+      FLAGS_system_image,
+      FLAGS_data_image,
+      FLAGS_cache_image,
+      FLAGS_metadata_image,
+      FLAGS_vendor_image,
+      FLAGS_product_image,
+    });
+  }
+
   tmp_config_obj.set_ramdisk_image_path(ramdisk_path);
-  tmp_config_obj.set_cache_image_path(FLAGS_cache_image);
-  tmp_config_obj.set_data_image_path(FLAGS_data_image);
-  tmp_config_obj.set_metadata_image_path(FLAGS_metadata_image);
 
   tmp_config_obj.set_mempath(FLAGS_mempath);
   tmp_config_obj.set_ivshmem_qemu_socket_path(
@@ -426,7 +463,7 @@ bool InitializeCuttlefishConfiguration(
     tmp_config_obj.set_usb_ip_socket_name(tmp_config_obj.PerInstancePath("usb-ip"));
   }
 
-  tmp_config_obj.set_kernel_log_socket_name(tmp_config_obj.PerInstancePath("kernel-log"));
+  tmp_config_obj.set_kernel_log_pipe_name(tmp_config_obj.PerInstancePath("kernel-log"));
   tmp_config_obj.set_deprecated_boot_completed(FLAGS_deprecated_boot_completed);
   tmp_config_obj.set_console_path(tmp_config_obj.PerInstancePath("console"));
   tmp_config_obj.set_logcat_path(tmp_config_obj.PerInstancePath("logcat"));
@@ -451,6 +488,7 @@ bool InitializeCuttlefishConfiguration(
 
   tmp_config_obj.set_qemu_binary(FLAGS_qemu_binary);
   tmp_config_obj.set_crosvm_binary(FLAGS_crosvm_binary);
+  tmp_config_obj.set_console_forwarder_binary(FLAGS_console_forwarder_binary);
   tmp_config_obj.set_ivserver_binary(FLAGS_ivserver_binary);
   tmp_config_obj.set_kernel_log_monitor_binary(FLAGS_kernel_log_monitor_binary);
 
@@ -543,8 +581,6 @@ void SetDefaultFlagsForQemu() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("hardware_name", "cutf_ivsh",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode("decompress_kernel", "false",
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatSerialMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
 }
@@ -574,12 +610,17 @@ void SetDefaultFlagsForCrosvm() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode("decompress_kernel", "true",
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("run_e2e_test", "false",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
+
+  if (!FLAGS_composite_disk.empty()) {
+    std::string composite_gsi_fstab =
+        vsoc::DefaultHostArtifactsPath("config/composite-gsi.fstab");
+    SetCommandLineOptionWithMode("gsi_fstab", composite_gsi_fstab.c_str(),
+                                 google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  }
 }
 
 bool ParseCommandLineFlags(int* argc, char*** argv) {
@@ -650,6 +691,75 @@ bool DecompressKernel(const std::string& src, const std::string& dst) {
 }
 } // namespace
 
+namespace {
+
+std::vector<ImagePartition> disk_config() {
+  std::vector<ImagePartition> partitions;
+  if (FLAGS_super_image.empty()) {
+    partitions.push_back(ImagePartition {
+      .label = "system",
+      .image_file_path = FLAGS_system_image,
+    });
+  } else {
+    partitions.push_back(ImagePartition {
+      .label = "super",
+      .image_file_path = FLAGS_super_image,
+    });
+  }
+  partitions.push_back(ImagePartition {
+    .label = "userdata",
+    .image_file_path = FLAGS_data_image,
+  });
+  partitions.push_back(ImagePartition {
+    .label = "cache",
+    .image_file_path = FLAGS_cache_image,
+  });
+  partitions.push_back(ImagePartition {
+    .label = "metadata",
+    .image_file_path = FLAGS_metadata_image,
+  });
+  if (FLAGS_super_image.empty()) {
+    partitions.push_back(ImagePartition {
+      .label = "product",
+      .image_file_path = FLAGS_product_image,
+    });
+    partitions.push_back(ImagePartition {
+      .label = "vendor",
+      .image_file_path = FLAGS_vendor_image,
+    });
+  }
+  partitions.push_back(ImagePartition {
+    .label = "boot",
+    .image_file_path = FLAGS_boot_image,
+  });
+  return partitions;
+}
+
+bool ShouldCreateCompositeDisk() {
+  if (FLAGS_composite_disk.empty()) {
+    return false;
+  }
+  auto composite_age = cvd::FileModificationTime(FLAGS_composite_disk);
+  for (auto& partition : disk_config()) {
+    auto partition_age = cvd::FileModificationTime(partition.image_file_path);
+    if (partition_age >= composite_age) {
+      LOG(INFO) << "composite disk age was \"" << std::chrono::system_clock::to_time_t(composite_age) << "\", "
+                << "partition age was \"" << std::chrono::system_clock::to_time_t(partition_age) << "\"";
+      return true;
+    }
+  }
+  return false;
+}
+
+void CreateCompositeDisk() {
+  if (FLAGS_composite_disk.empty()) {
+    LOG(FATAL) << "asked to create composite disk, but path was empty";
+  }
+  aggregate_image(disk_config(), FLAGS_composite_disk);
+}
+
+} // namespace
+
 vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
   if (!ParseCommandLineFlags(argc, argv)) {
     LOG(ERROR) << "Failed to parse command arguments";
@@ -709,18 +819,20 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
   ValidateAdbModeFlag(*config);
 
   // Create data if necessary
-  if (!ApplyDataImagePolicy(*config)) {
+  if (!ApplyDataImagePolicy(*config, FLAGS_data_image)) {
     exit(cvd::kCuttlefishConfigurationInitError);
   }
 
-  CreateBlankImage(FLAGS_metadata_image, FLAGS_blank_metadata_image_mb, "none");
+  if (!cvd::FileExists(FLAGS_metadata_image)) {
+    CreateBlankImage(FLAGS_metadata_image, FLAGS_blank_metadata_image_mb, "none");
+  }
+
+  if (ShouldCreateCompositeDisk()) {
+    CreateCompositeDisk();
+  }
 
   // Check that the files exist
-  for (const auto& file :
-       {config->system_image_path(), config->cache_image_path(),
-        config->data_image_path(), config->vendor_image_path(),
-        config->metadata_image_path(),  config->product_image_path(),
-        config->super_image_path()}) {
+  for (const auto& file : config->virtual_disk_paths()) {
     if (!file.empty() && !cvd::FileHasContent(file.c_str())) {
       LOG(ERROR) << "File not found: " << file;
       exit(cvd::kCuttlefishConfigurationInitError);

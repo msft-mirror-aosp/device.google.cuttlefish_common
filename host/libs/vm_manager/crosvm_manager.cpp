@@ -102,7 +102,12 @@ cvd::Command CrosvmManager::StartCommand() {
   }
   if (config_->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
     command.AddParameter("--gpu");
-    command.AddParameter("--wayland-sock=", config_->wayland_socket());
+    if (config_->wayland_socket().size()) {
+      command.AddParameter("--wayland-sock=", config_->wayland_socket());
+    }
+    if (config_->x_display().size()) {
+      command.AddParameter("--x-display=", config_->x_display());
+    }
   }
   command.AddParameter("--null-audio");
   command.AddParameter("--mem=", config_->memory_mb());

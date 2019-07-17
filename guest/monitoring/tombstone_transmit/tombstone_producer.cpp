@@ -1,5 +1,3 @@
-#pragma once
-
 /*
  * Copyright (C) 2019 The Android Open Source Project
  *
@@ -15,7 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <stdlib.h>
 
-#include "host/libs/config/cuttlefish_config.h"
-
-void ConfigureRil(vsoc::CuttlefishConfig* config);
+int __attribute__((noreturn)) main() {
+  abort();
+}

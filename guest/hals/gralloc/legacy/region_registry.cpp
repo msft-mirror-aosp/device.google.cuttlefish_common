@@ -200,10 +200,10 @@ void* reference_region(const char* op, const private_handle_t* hnd) {
             strerror(errno));
     }
     region->base_ = mappedAddress;
-    ALOGI("Mapped %s hnd=%p fd=%d base=%p format=%s(0x%x) width=%d height=%d",
+    ALOGI("Mapped %s hnd=%p fd=%d base=%p format=%s(0x%x) width=%d height=%d stride_in_pixels=%d total_size=%d",
           name_buf, hnd, hnd->fd, region->base_,
           pixel_format_to_string(hnd->format), hnd->format,
-          hnd->x_res, hnd->y_res);
+          hnd->x_res, hnd->y_res, hnd->stride_in_pixels, hnd->total_size);
   }
 
   void* rval = region->base_;
@@ -233,7 +233,7 @@ int unreference_region(const char* op, const private_handle_t* hnd) {
   --region->num_references_;
   if (!region->num_references_) {
     ALOGI("Unmapped %s hnd=%p fd=%d base=%p", name_buf, hnd,
-          hnd->fd, region->base_);
+             hnd->fd, region->base_);
     if (recycle_munmap(region->base_, hnd->total_size) < 0) {
       ALOGE("Could not unmap %s", strerror(errno));
     }

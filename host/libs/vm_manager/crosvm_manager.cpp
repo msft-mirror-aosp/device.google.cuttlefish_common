@@ -34,11 +34,6 @@ std::string GetControlSocketPath(const vsoc::CuttlefishConfig* config) {
   return config->PerInstancePath("crosvm_control.sock");
 }
 
-cvd::SharedFD ConnectToLogMonitor(const std::string& log_monitor_name) {
-  return cvd::SharedFD::SocketLocalClient(log_monitor_name.c_str(), false,
-                                          SOCK_STREAM);
-}
-
 void AddTapFdParameter(cvd::Command* crosvm_cmd, const std::string& tap_name) {
   auto tap_fd = cvd::OpenTapInterface(tap_name);
   if (tap_fd->IsOpen()) {
@@ -76,7 +71,7 @@ bool CrosvmManager::ConfigureGpu(vsoc::CuttlefishConfig* config) {
 }
 
 void CrosvmManager::ConfigureBootDevices(vsoc::CuttlefishConfig* config) {
-  // PCI domain 0, bus 0, device 5, function 0
+  // PCI domain 0, bus 0, device 1, function 0
   // TODO There is no way to control this assignment with crosvm (yet)
   config->add_kernel_cmdline(
     "androidboot.boot_devices=pci0000:00/0000:00:01.0");
@@ -85,83 +80,83 @@ void CrosvmManager::ConfigureBootDevices(vsoc::CuttlefishConfig* config) {
 CrosvmManager::CrosvmManager(const vsoc::CuttlefishConfig* config)
     : VmManager(config) {}
 
-cvd::Command CrosvmManager::StartCommand(bool with_frontend) {
-  // TODO Add aarch64 support
-  // TODO Add the tap interfaces (--tap-fd)
-  // TODO Redirect logcat output
-
-  // Run crosvm directly instead of through a cf_crosvm.sh script. The kernel
-  // logs are on crosvm's standard output, so we need to redirect it to the log
-  // monitor socket, a helper script will print more than just the logs to
-  // standard output.
-  cvd::Command command(config_->crosvm_binary());
-  command.AddParameter("run");
+std::vector<cvd::Command> CrosvmManager::StartCommands(bool with_frontend) {
+  cvd::Command crosvm_cmd(config_->crosvm_binary());
+  crosvm_cmd.AddParameter("run");
 
   if (config_->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
-    command.AddParameter("--gpu");
-    command.AddParameter("--wayland-sock=", config_->wayland_socket());
+    crosvm_cmd.AddParameter("--gpu");
+    if (config_->wayland_socket().size()) {
+      crosvm_cmd.AddParameter("--wayland-sock=", config_->wayland_socket());
+    }
+    if (config_->x_display().size()) {
+      crosvm_cmd.AddParameter("--x-display=", config_->x_display());
+    }
   }
   if (!config_->ramdisk_image_path().empty()) {
-    command.AddParameter("--initrd=", config_->ramdisk_image_path());
+    crosvm_cmd.AddParameter("--initrd=", config_->ramdisk_image_path());
   }
-  command.AddParameter("--null-audio");
-  command.AddParameter("--mem=", config_->memory_mb());
-  command.AddParameter("--cpus=", config_->cpus());
-  command.AddParameter("--params=", config_->kernel_cmdline_as_string());
-  if (config_->super_image_path().empty()) {
-    command.AddParameter("--rwdisk=", config_->system_image_path());
-  } else {
-    command.AddParameter("--rwdisk=", config_->super_image_path());
+  crosvm_cmd.AddParameter("--null-audio");
+  crosvm_cmd.AddParameter("--mem=", config_->memory_mb());
+  crosvm_cmd.AddParameter("--cpus=", config_->cpus());
+  crosvm_cmd.AddParameter("--params=", config_->kernel_cmdline_as_string());
+  for (const auto& disk : config_->virtual_disk_paths()) {
+    crosvm_cmd.AddParameter("--rwdisk=", disk);
   }
-  command.AddParameter("--rwdisk=", config_->data_image_path());
-  command.AddParameter("--rwdisk=", config_->cache_image_path());
-  command.AddParameter("--rwdisk=", config_->metadata_image_path());
-  if (config_->super_image_path().empty()) {
-    command.AddParameter("--rwdisk=", config_->vendor_image_path());
-    command.AddParameter("--rwdisk=", config_->product_image_path());
-  }
-  command.AddParameter("--socket=", GetControlSocketPath(config_));
+  crosvm_cmd.AddParameter("--socket=", GetControlSocketPath(config_));
   if (!config_->gsi_fstab_path().empty()) {
-    command.AddParameter("--android-fstab=", config_->gsi_fstab_path());
+    crosvm_cmd.AddParameter("--android-fstab=", config_->gsi_fstab_path());
   }
 
   if (with_frontend) {
-    command.AddParameter("--single-touch=", config_->touch_socket_path(), ":",
+    crosvm_cmd.AddParameter("--single-touch=", config_->touch_socket_path(), ":",
                          config_->x_res(), ":", config_->y_res());
-    command.AddParameter("--keyboard=", config_->keyboard_socket_path());
+    crosvm_cmd.AddParameter("--keyboard=", config_->keyboard_socket_path());
   }
 
-  AddTapFdParameter(&command, config_->wifi_tap_name());
-  AddTapFdParameter(&command, config_->mobile_tap_name());
+  AddTapFdParameter(&crosvm_cmd, config_->wifi_tap_name());
+  AddTapFdParameter(&crosvm_cmd, config_->mobile_tap_name());
 
   // TODO remove this (use crosvm's seccomp files)
-  command.AddParameter("--disable-sandbox");
+  crosvm_cmd.AddParameter("--disable-sandbox");
 
   if (config_->vsock_guest_cid() >= 2) {
-    command.AddParameter("--cid=", config_->vsock_guest_cid());
+    crosvm_cmd.AddParameter("--cid=", config_->vsock_guest_cid());
   }
 
-  auto kernel_log_connection =
-      ConnectToLogMonitor(config_->kernel_log_socket_name());
-  if (!kernel_log_connection->IsOpen()) {
-    LOG(WARNING) << "Unable to connect to log monitor: "
-                 << kernel_log_connection->StrError();
-  } else {
-    command.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdOut,
-                          kernel_log_connection);
+  // TODO (138616941) re-enable the console on its own serial port
+
+  // Redirect the first serial port with the kernel logs to the appropriate file
+  crosvm_cmd.AddParameter("--serial=num=1,type=file,path=",
+                       config_->kernel_log_pipe_name(),",console=true");
+  // Use stdio for the second serial port, it contains the serial console.
+  crosvm_cmd.AddParameter("--serial=num=2,type=stdout,stdin=true");
+
+  // Redirect standard input and output to a couple of pipes for the console
+  // forwarder host process to handle.
+  cvd::SharedFD console_in_rd, console_in_wr, console_out_rd, console_out_wr;
+  if (!cvd::SharedFD::Pipe(&console_in_rd, &console_in_wr) ||
+      !cvd::SharedFD::Pipe(&console_out_rd, &console_out_wr)) {
+    LOG(ERROR) << "Failed to create console pipes for crosvm: "
+               << strerror(errno);
+    return {};
   }
 
-  auto dev_null = cvd::SharedFD::Open("/dev/null", O_RDONLY);
-  if (dev_null->IsOpen()) {
-    command.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdIn, dev_null);
-  } else {
-    LOG(ERROR) << "Unable to open /dev/null for stdin redirection";
-  }
+  crosvm_cmd.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdIn,
+                           console_in_rd);
+  crosvm_cmd.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdOut,
+                           console_out_wr);
+  cvd::Command console_cmd(config_->console_forwarder_binary());
+  console_cmd.AddParameter("--console_in_fd=", console_in_wr);
+  console_cmd.AddParameter("--console_out_fd=", console_out_rd);
 
   // This needs to be the last parameter
-  command.AddParameter(config_->GetKernelImageToUse());
+  crosvm_cmd.AddParameter(config_->GetKernelImageToUse());
 
-  return command;
+  std::vector<cvd::Command> ret;
+  ret.push_back(std::move(crosvm_cmd));
+  ret.push_back(std::move(console_cmd));
+  return ret;
 }
 
 bool CrosvmManager::Stop() {

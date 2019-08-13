@@ -15,6 +15,7 @@
 
 subdirs = [
     "adbshell",
+    "fetch_cvd",
     "launch",
     "stop_cvd",
     "ivserver",
@@ -22,4 +23,5 @@ subdirs = [
     "virtual_usb_manager",
     "kernel_log_monitor",
     "config_server",
+    "console_forwarder",
 ]

@@ -73,9 +73,26 @@ off_t FileSize(const std::string& path) {
   return st.st_size;
 }
 
+// TODO(schuffelen): Use std::filesystem::last_write_time when on C++17
+std::chrono::system_clock::time_point FileModificationTime(const std::string& path) {
+  struct stat st;
+  if (stat(path.c_str(), &st) == -1) {
+    return std::chrono::system_clock::time_point();
+  }
+  std::chrono::seconds seconds(st.st_mtim.tv_sec);
+  return std::chrono::system_clock::time_point(seconds);
+}
+
 bool RemoveFile(const std::string& file) {
   LOG(INFO) << "Removing " << file;
   return remove(file.c_str()) == 0;
+}
+
+std::string CurrentDirectory() {
+  char* path = getcwd(nullptr, 0);
+  std::string ret(path);
+  free(path);
+  return ret;
 }
 
 }  // namespace cvd

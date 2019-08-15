@@ -26,6 +26,9 @@
 #include <set>
 
 #include <glog/logging.h>
+
+#include "common/libs/fs/shared_buf.h"
+
 namespace {
 
 // If a redirected-to file descriptor was already closed, it's possible that
@@ -188,6 +191,17 @@ pid_t Subprocess::Wait(int* wstatus, int options) {
   return retval;
 }
 
+Command::ParameterBuilder::~ParameterBuilder() {
+  Build();
+}
+void Command::ParameterBuilder::Build()  {
+  auto param = stream_.str();
+  stream_ = std::stringstream();
+  if (param.size()) {
+    cmd_->AddParameter(param);
+  }
+}
+
 Command::~Command() {
   // Close all inherited file descriptors
   for(const auto& entry: inherited_fds_) {
@@ -268,4 +282,34 @@ int execute(const std::vector<std::string>& command) {
   }
   return subprocess.Wait();
 }
+
+int execute_capture_output(const std::vector<std::string>& command,
+                           std::string* output) {
+  Command cmd(command[0]);
+  for (size_t i = 1; i < command.size(); ++i) {
+    cmd.AddParameter(command[i]);
+  }
+  cvd::SharedFD pipe_read, pipe_write;
+  cvd::SharedFD::Pipe(&pipe_read, &pipe_write);
+  cmd.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdOut, pipe_write);
+  cmd.RedirectStdIO(cvd::Subprocess::StdIOChannel::kStdErr, pipe_write);
+
+  auto subprocess = cmd.Start();
+  if (!subprocess.Started()) {
+    return -1;
+  }
+  {
+    pipe_write->Close();
+    // Force the destructor to run by moving it into a smaller scope.
+    // This is necessary to close the write end of the pipe.
+    cvd::Command forceDelete = std::move(cmd);
+  }
+
+  int read = cvd::ReadAll(pipe_read, output);
+  if (read < 0) {
+    LOG(FATAL) << "Could not read from pipe in execute_capture_output";
+  }
+  return subprocess.Wait();
+}
+
 }  // namespace cvd

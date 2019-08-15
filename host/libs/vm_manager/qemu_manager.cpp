@@ -51,9 +51,40 @@ void LogAndSetEnv(const char* key, const std::string& value) {
   LOG(INFO) << key << "=" << value;
 }
 
+std::string JoinString(const std::vector<std::string>& args,
+                       const std::string& delim) {
+  bool first = true;
+  std::stringstream output;
+  for (const auto& arg : args) {
+    if (first) {
+      first = false;
+    } else {
+      output << delim;
+    }
+    output << arg;
+  }
+  return output.str();
+}
+
 }  // namespace
 
 const std::string QemuManager::name() { return "qemu_cli"; }
+
+bool QemuManager::ConfigureGpu(vsoc::CuttlefishConfig *config) {
+  if (config->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
+    return false;
+  }
+  // Override the default HAL search paths in all cases. We do this because
+  // the HAL search path allows for fallbacks, and fallbacks in conjunction
+  // with properities lead to non-deterministic behavior while loading the
+  // HALs.
+  config->add_kernel_cmdline("androidboot.hardware.gralloc=cutf_ashmem");
+  config->add_kernel_cmdline(
+      "androidboot.hardware.hwcomposer=cutf_ivsh_ashmem");
+  config->add_kernel_cmdline(
+      "androidboot.hardware.egl=swiftshader");
+  return true;
+}
 
 void QemuManager::ConfigureBootDevices(vsoc::CuttlefishConfig* config) {
   // PCI domain 0, bus 0, device 3, function 0
@@ -65,7 +96,7 @@ void QemuManager::ConfigureBootDevices(vsoc::CuttlefishConfig* config) {
 QemuManager::QemuManager(const vsoc::CuttlefishConfig* config)
   : VmManager(config) {}
 
-cvd::Command QemuManager::StartCommand(){
+std::vector<cvd::Command> QemuManager::StartCommands(bool /*with_frontend*/) {
   // Set the config values in the environment
   LogAndSetEnv("qemu_binary", config_->qemu_binary());
   LogAndSetEnv("instance_name", config_->instance_name());
@@ -78,30 +109,28 @@ cvd::Command QemuManager::StartCommand(){
   LogAndSetEnv("ramdisk_image_path", config_->ramdisk_image_path());
   LogAndSetEnv("kernel_cmdline", config_->kernel_cmdline_as_string());
   LogAndSetEnv("dtb_path", config_->dtb_path());
-  LogAndSetEnv("system_image_path", config_->system_image_path());
-  LogAndSetEnv("data_image_path", config_->data_image_path());
-  LogAndSetEnv("cache_image_path", config_->cache_image_path());
-  LogAndSetEnv("vendor_image_path", config_->vendor_image_path());
-  LogAndSetEnv("metadata_image_path", config_->metadata_image_path());
-  LogAndSetEnv("product_image_path", config_->product_image_path());
-  LogAndSetEnv("super_image_path", config_->super_image_path());
+  LogAndSetEnv("virtual_disk_paths", JoinString(config_->virtual_disk_paths(),
+                                                ";"));
   LogAndSetEnv("wifi_tap_name", config_->wifi_tap_name());
   LogAndSetEnv("mobile_tap_name", config_->mobile_tap_name());
-  LogAndSetEnv("kernel_log_socket_name",
-                      config_->kernel_log_socket_name());
+  LogAndSetEnv("kernel_log_pipe_name",
+               config_->kernel_log_pipe_name());
   LogAndSetEnv("console_path", config_->console_path());
   LogAndSetEnv("logcat_path", config_->logcat_path());
   LogAndSetEnv("ivshmem_qemu_socket_path",
-                      config_->ivshmem_qemu_socket_path());
+               config_->ivshmem_qemu_socket_path());
   LogAndSetEnv("ivshmem_vector_count",
-                      std::to_string(config_->ivshmem_vector_count()));
+               std::to_string(config_->ivshmem_vector_count()));
   LogAndSetEnv("usb_v1_socket_name", config_->usb_v1_socket_name());
   LogAndSetEnv("vsock_guest_cid", std::to_string(config_->vsock_guest_cid()));
   LogAndSetEnv("logcat_mode", config_->logcat_mode());
 
   cvd::Command qemu_cmd(vsoc::DefaultHostArtifactsPath("bin/cf_qemu.sh"));
-  return qemu_cmd;
+  std::vector<cvd::Command> ret;
+  ret.push_back(std::move(qemu_cmd));
+  return ret;
 }
+
 bool QemuManager::Stop() {
   auto monitor_path = GetMonitorPath(config_);
   auto monitor_sock = cvd::SharedFD::SocketLocalClient(

@@ -85,6 +85,24 @@ class Command {
            BuildParameter(stream, args...);
   }
  public:
+  class ParameterBuilder {
+  public:
+    ParameterBuilder(Command* cmd) : cmd_(cmd) {};
+    ParameterBuilder(ParameterBuilder&& builder) = default;
+    ~ParameterBuilder();
+
+    template<typename T>
+    ParameterBuilder& operator<<(T t) {
+      cmd_->BuildParameter(&stream_, t);
+      return *this;
+    }
+
+    void Build();
+  private:
+    cvd::Command* cmd_;
+    std::stringstream stream_;
+  };
+
   Command(const std::string& executable) {
     command_.push_back(executable);
   }
@@ -117,6 +135,10 @@ class Command {
     return false;
   }
 
+  ParameterBuilder GetParameterBuilder() {
+    return ParameterBuilder(this);
+  }
+
   // Redirects the standard IO of the command.
   bool RedirectStdIO(Subprocess::StdIOChannel channel, cvd::SharedFD shared_fd);
 
@@ -146,5 +168,9 @@ class Command {
 int execute(const std::vector<std::string>& command,
             const std::vector<std::string>& env);
 int execute(const std::vector<std::string>& command);
+
+// Like execute, but captures stdout and stderr and returns it in "output".
+int execute_capture_output(const std::vector<std::string>& command,
+                           std::string* output);
 
 }  // namespace cvd

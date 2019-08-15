@@ -18,13 +18,13 @@ cc_binary_host {
     srcs: [
         "main.cc",
         "screen_region_handler.cc",
-        "ril_config.cc",
         "vsoc_shared_memory.cc",
         "boot_image_unpacker.cc",
         "process_monitor.cc",
         "launch.cc",
         "data_image.cc",
         "flags.cc",
+        "image_aggregator.cc",
     ],
     header_libs: [
         "cuttlefish_glog",
@@ -47,4 +47,10 @@ cc_binary_host {
         "libjsoncpp",
     ],
     defaults: ["cuttlefish_host_only", "cuttlefish_libicuuc"],
+}
+
+cc_prebuilt_binary {
+    name: "cf_bpttool",
+    srcs: ["cf_bpttool"],
+    defaults: ["cuttlefish_host_only"],
 }

@@ -14,31 +14,33 @@
 
 
 cc_library_shared {
-    name: "hwcomposer.cutf_cvm",
+    name: "hwcomposer.cutf_cvm_ashmem",
     relative_install_path: "hw",
     defaults: ["cuttlefish_guest_only"],
     vendor: true,
     srcs: [
+        "vsocket_screen_view.cpp",
         "hwcomposer.cpp",
-        "geometry_utils.cpp",
-        "vsoc_composer.cpp",
-        "base_composer.cpp",
     ],
     include_dirs: [
         "device/google/cuttlefish_common",
     ],
     export_include_dirs: ["."],
-    static_libs: ["libyuv_static", "hwcomposer_common"],
+    static_libs: [
+        "libyuv_static", 
+        "hwcomposer_common"
+    ],
     shared_libs: [
+        "cuttlefish_auto_resources",
         "liblog",
         "libhardware",
         "libbase",
         "libcutils",
         "libutils",
         "libsync",
-        "libhardware",
         "libjpeg",
         "libcuttlefish_utils",
         "libcuttlefish_fs",
+        "libcuttlefish_device_config",
     ],
 }

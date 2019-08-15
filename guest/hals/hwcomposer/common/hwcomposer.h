@@ -15,15 +15,18 @@
  * limitations under the License.
  */
 
+#include <memory>
+
 #include <hardware/hwcomposer.h>
+#include <hardware/hwcomposer_defs.h>
+
+#include "guest/hals/hwcomposer/common/screen_view.h"
+
+#define IS_TARGET_FRAMEBUFFER(x) ((x) == HWC_FRAMEBUFFER_TARGET)
+#define IS_PRIMARY_DISPLAY(x) ((x) == HWC_DISPLAY_PRIMARY)
 
 namespace cvd {
-  struct hwc_composer_device_data_t {
-    const hwc_procs_t* procs;
-    pthread_t vsync_thread;
-    int64_t vsync_base_timestamp;
-    int32_t vsync_period_ns;
-  };
-
-  void* hwc_vsync_thread(void* data);
+int cvd_hwc_open(std::unique_ptr<ScreenView> screen_view,
+                 const struct hw_module_t* module, const char* name,
+                 struct hw_device_t** device);
 }  // namespace cvd

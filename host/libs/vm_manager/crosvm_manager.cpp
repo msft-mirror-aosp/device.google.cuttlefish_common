@@ -104,9 +104,6 @@ std::vector<cvd::Command> CrosvmManager::StartCommands(bool with_frontend) {
   });
   crosvm_cmd.AddParameter("run");
 
-  if (!config_->ramdisk_image_path().empty()) {
-    crosvm_cmd.AddParameter("--initrd=", config_->ramdisk_image_path());
-  }
   if (config_->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
     crosvm_cmd.AddParameter("--gpu");
     if (config_->wayland_socket().size()) {
@@ -115,6 +112,9 @@ std::vector<cvd::Command> CrosvmManager::StartCommands(bool with_frontend) {
     if (config_->x_display().size()) {
       crosvm_cmd.AddParameter("--x-display=", config_->x_display());
     }
+  }
+  if (!config_->final_ramdisk_path().empty()) {
+    crosvm_cmd.AddParameter("--initrd=", config_->final_ramdisk_path());
   }
   crosvm_cmd.AddParameter("--null-audio");
   crosvm_cmd.AddParameter("--mem=", config_->memory_mb());

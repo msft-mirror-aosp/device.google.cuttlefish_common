@@ -41,11 +41,12 @@ import java.net.Socket;
 import java.util.List;
 
 /**
- * Tests used to validate E2E WIFI functionality.
+ * Tests used to validate E2E RIL functionality.
  */
 @RunWith(JUnit4.class)
 public class RilE2eTests {
     private static final String TAG = "RilE2eTests";
+    private static final int MAX_POLL_DISABLED_WIFI_COUNT = 10;
     private Context mContext;
     private WifiManager mWifiManager;
     private ConnectivityManager mConnManager;
@@ -57,56 +58,36 @@ public class RilE2eTests {
         mWifiManager = (WifiManager)mContext.getSystemService(Context.WIFI_SERVICE);
         mConnManager = (ConnectivityManager)mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
         mTeleManager = (TelephonyManager)mContext.getSystemService(Context.TELEPHONY_SERVICE);
-        disableAllWifiNetworks();
+        // There must not be an active wifi connection while running the test or else
+        // getActiveNetworkInfo() will return that instead of the telephony network.
+        // Turning wifi off should do the trick.
+        disableWifi();
     }
 
 
-    private void enableWifi() {
-        Log.i(TAG, "Enabling WIFI...");
-        mWifiManager.setWifiEnabled(true);
-        while (!(mWifiManager.isWifiEnabled() && mWifiManager.pingSupplicant())) {
-            Log.i(TAG, "Waiting for WIFI (Enabled: " + mWifiManager.isWifiEnabled() +
-                    ", Ready: " + mWifiManager.pingSupplicant() + ")");
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {}
-        }
-    }
-
-
-    private void disableWifi() {
+    private void disableWifi() throws Exception {
         Log.i(TAG, "Disabling WIFI...");
 
         mWifiManager.setWifiEnabled(false);
-        while (mWifiManager.isWifiEnabled()) {
+        int count = MAX_POLL_DISABLED_WIFI_COUNT;
+        while (mWifiManager.isWifiEnabled() && count-- > 0) {
             Log.i(TAG, "Waiting for WIFI to be disabled...");
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {}
         }
-    }
-
-
-    private void disableAllWifiNetworks() {
-        enableWifi();
-
-        List<WifiConfiguration> configs = mWifiManager.getConfiguredNetworks();
-        Assert.assertNotNull(configs);
-        for (WifiConfiguration config : configs) {
-            Log.i(TAG, "Removing network " + config.networkId + ": " + config.SSID);
-            Assert.assertTrue(mWifiManager.disableNetwork(config.networkId));
-            Assert.assertTrue(mWifiManager.removeNetwork(config.networkId));
+        if (count < 0) {
+            Log.e(TAG, "Reached max number of polls while waiting to disable wifi");
+            throw new Exception("Timed out waiting for wifi to be disabled");
         }
-
-        disableWifi();
     }
 
 
     /**
-     * Verify that WIFI stack is able to get up and connect to network in
+     * Verify that RIL stack is able to get up and connect to network in
      * 60 seconds.
      */
-    @Test(timeout = 60 * 1000)
+    @Test(timeout = 10 * 1000)
     public void testRilConnects() throws Exception {
         while (true) {
             NetworkInfo net = mConnManager.getActiveNetworkInfo();

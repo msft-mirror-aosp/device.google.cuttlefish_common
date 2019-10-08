@@ -16,15 +16,8 @@
 cc_binary_host {
     name: "launch_cvd",
     srcs: [
-        "main.cc",
-        "screen_region_handler.cc",
-        "vsoc_shared_memory.cc",
-        "boot_image_unpacker.cc",
-        "process_monitor.cc",
-        "launch.cc",
-        "data_image.cc",
-        "flags.cc",
-        "image_aggregator.cc",
+        "flag_forwarder.cc",
+        "launch_cvd.cc",
     ],
     header_libs: [
         "cuttlefish_glog",
@@ -36,7 +29,7 @@ cc_binary_host {
         "libcuttlefish_utils",
         "cuttlefish_auto_resources",
         "libbase",
-        "libnl"
+        "libnl",
     ],
     static_libs: [
         "libcuttlefish_host_config",
@@ -47,10 +40,4 @@ cc_binary_host {
         "libjsoncpp",
     ],
     defaults: ["cuttlefish_host_only", "cuttlefish_libicuuc"],
-}
-
-cc_prebuilt_binary {
-    name: "cf_bpttool",
-    srcs: ["cf_bpttool"],
-    defaults: ["cuttlefish_host_only"],
 }

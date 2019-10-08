@@ -41,7 +41,7 @@
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/fs/shared_select.h"
 #include "common/libs/utils/environment.h"
-#include "host/commands/launch/launcher_defs.h"
+#include "host/commands/run_cvd/runner_defs.h"
 #include "host/libs/config/cuttlefish_config.h"
 #include "host/libs/vm_manager/vm_manager.h"
 
@@ -54,7 +54,10 @@ namespace {
 std::set<pid_t> GetCandidateProcessGroups() {
   std::string cmd = "fuser";
   // Add the instance directory
-  cmd += " " + cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime/*";
+  auto instance_dir = cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
+  cmd += " " + instance_dir;
+  // Add files in instance dir
+  cmd += " " + instance_dir + "/*";
   // Add the shared memory file
   cmd += " " + vsoc::GetPerInstanceDefault("/dev/shm/cvd-");
   std::shared_ptr<FILE> cmd_out(popen(cmd.c_str(), "r"), pclose);

@@ -20,7 +20,7 @@ namespace cvd {
 constexpr char kLogcatSerialMode[] = "serial";
 constexpr char kLogcatVsockMode[] = "vsock";
 
-enum LauncherExitCodes : int {
+enum RunnerExitCodes : int {
   kSuccess = 0,
   kArgumentParsingError = 1,
   kInvalidHostConfiguration = 2,
@@ -43,6 +43,7 @@ enum LauncherExitCodes : int {
   kConfigServerError = 19,
   kTombstoneServerError = 20,
   kTombstoneDirCreationError = 21,
+  kInitRamFsConcatError = 22,
 };
 
 // Actions supported by the launcher server

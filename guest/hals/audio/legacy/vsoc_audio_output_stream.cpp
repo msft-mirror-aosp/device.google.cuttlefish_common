@@ -29,7 +29,6 @@ extern "C"{
 #include "guest/hals/audio/legacy/audio_hal.h"
 #include "guest/hals/audio/legacy/vsoc_audio.h"
 #include "guest/hals/audio/legacy/vsoc_audio_output_stream.h"
-#include "guest/libs/platform_support/api_level_fixes.h"
 #include "guest/libs/remoter/remoter_framework_pkt.h"
 
 #if defined(AUDIO_DEVICE_API_VERSION_3_0)
@@ -63,7 +62,7 @@ GceAudioOutputStream::GceAudioOutputStream(GceAudio* dev) :
 
 int GceAudioOutputStream::Dump(int fd) const {
   D("GceAudioOutputStream::%s", __FUNCTION__);
-  VSOC_FDPRINTF(
+  dprintf(
       fd,
       "\tout_dump:\n"
       "\t\tsample rate: %u\n"
@@ -270,12 +269,7 @@ int GceAudioOutputStream::Open(
   out->message_header_.format = config->format;
   out->message_header_.channel_mask = config->channel_mask;
   out->message_header_.frame_rate = config->sample_rate;
-  out->frame_count_ =
-#if VSOC_PLATFORM_SDK_AFTER(K)
-      config->frame_count;
-#else
-      0;
-#endif
+  out->frame_count_ = config->frame_count;
   out->common.get_sample_rate =
       cvd::thunk<audio_stream, &GceAudioOutputStream::GetSampleRate>;
   out->common.set_sample_rate =

@@ -128,64 +128,16 @@ args+=(
     -device "AC97"
 )
 
-if [[ -n "${dtb_path}" ]]; then
-  if [[ "${qemu_binary##*/}" = "qemu-system-aarch64" ]]; then
-    # Decompile the dt fragment to include in our machine FDT
-    dtsi_path="${default_dir}/android.dtsi"
-    dtc_args=(
-      -I dtb
-      "${dtb_path}"
-      -O dts
-      -o "${dtsi_path}"
-    )
-    run "${dtc_binary}" "${dtc_args[@]}"
-
-    # Remove duplicate version definition from the dtsi
-    sed_binary=sed
-    sed_args=(
-      -i "/^\/dts-v1\/;$/d"
-      ${dtsi_path}
-    )
-    run "${sed_binary}" "${sed_args[@]}"
-
-    # Dump the machine FDT blob
-    dts_path="${default_dir}/cuttlefish.dts"
-    dtb_path="${default_dir}/cuttlefish.dtb"
-    dtb_args=(-machine "dumpdtb=${dtb_path}")
-    run "${qemu_binary}" "${args[@]}" "${dtb_args[@]}"
-
-    # Decompile the FDT blob
-    dtc_args=(
-      -I dtb
-      ${dtb_path}
-      -O dts
-      -o ${dts_path}
-    )
-    run "${dtc_binary}" "${dtc_args[@]}"
-
-    # Concatenate the dts and dtsi sources
-    echo "cat ${dtsi_path} >>${dts_path}"
-    echo
-    cat ${dtsi_path} >>${dts_path}
-
-    # Compile the patched machine FDT
-    dtc_args=(
-      -i "${dts_path%/*}"
-      -I dts
-      "${dts_path}"
-      -O dtb
-      -o "${dtb_path}"
-    )
-    run "${dtc_binary}" "${dtc_args[@]}"
-  fi
-
-  args+=(-dtb "${dtb_path}")
-fi
-
 # The services providing these sockets don't expect multiple connections,
 # so we must not have them in 'args' when we dump the machine FDT. It's
 # OK to add them now, after the dumping and patching has completed.
 # The (maybe patched) DTB can also be provided now.
+
+if [[ "${use_bootloader}" = "true" ]]; then
+  args+=(
+    -bios "${bootloader}"
+  )
+fi
 
 args+=(
     -chardev "socket,id=charmonitor,path=${monitor_path:-${default_dir}/qemu_monitor.sock},server,nowait"
@@ -193,7 +145,7 @@ args+=(
     -chardev "file,id=charserial0,path=${kernel_log_pipe_name:-${default_dir}/kernel-log},append=on"
     -device "${kernel_console_serial},chardev=charserial0,id=serial0"
     -chardev "socket,id=charserial1,path=${console_path:-${default_dir}/console},server,nowait"
-    -device "pci-serial,chardev=charserial1,id=serial1"
+    -device "${kernel_console_serial},chardev=charserial1,id=serial1"
     -chardev "socket,path=${ivshmem_qemu_socket_path:-${default_dir}/ivshmem_socket_qemu},id=ivsocket"
     -device "ivshmem-doorbell,chardev=ivsocket,vectors=${ivshmem_vector_count}"
 )

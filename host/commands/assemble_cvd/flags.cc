@@ -1,6 +1,7 @@
-#include "host/commands/launch/flags.h"
+#include "host/commands/assemble_cvd/flags.h"
 
 #include <iostream>
+#include <fstream>
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -9,22 +10,17 @@
 #include "common/libs/utils/environment.h"
 #include "common/libs/utils/files.h"
 #include "common/vsoc/lib/vsoc_memory.h"
-#include "host/commands/launch/boot_image_unpacker.h"
-#include "host/commands/launch/data_image.h"
-#include "host/commands/launch/image_aggregator.h"
-#include "host/commands/launch/launch.h"
-#include "host/commands/launch/launcher_defs.h"
+#include "host/commands/assemble_cvd/boot_image_unpacker.h"
+#include "host/commands/assemble_cvd/data_image.h"
+#include "host/commands/assemble_cvd/image_aggregator.h"
+#include "host/commands/assemble_cvd/assembler_defs.h"
 #include "host/libs/vm_manager/crosvm_manager.h"
 #include "host/libs/vm_manager/qemu_manager.h"
 #include "host/libs/vm_manager/vm_manager.h"
 
 using vsoc::GetPerInstanceDefault;
-using cvd::LauncherExitCodes;
+using cvd::AssemblerExitCodes;
 
-DEFINE_string(
-    system_image, "",
-    "Path to the system image, if empty it is assumed to be a file named "
-    "system.img in the directory specified by -system_image_dir");
 DEFINE_string(cache_image, "", "Location of the cache partition image.");
 DEFINE_string(metadata_image, "", "Location of the metadata partition image "
               "to be generated.");
@@ -49,6 +45,7 @@ DEFINE_int32(refresh_rate_hz, 60, "Screen refresh rate in Hertz");
 DEFINE_int32(num_screen_buffers, 3, "The number of screen buffers");
 DEFINE_string(kernel_path, "",
               "Path to the kernel. Overrides the one from the boot image");
+DEFINE_string(initramfs_path, "", "Path to the initramfs");
 DEFINE_bool(decompress_kernel, false,
             "Whether to decompress the kernel image.");
 DEFINE_string(kernel_decompresser_executable,
@@ -69,7 +66,9 @@ DEFINE_bool(guest_enforce_security, true,
             "-guest_security is empty.");
 DEFINE_bool(guest_audit_security, true,
             "Whether to log security audits.");
-DEFINE_string(boot_image, "", "Location of cuttlefish boot image.");
+DEFINE_string(boot_image, "",
+              "Location of cuttlefish boot image. If empty it is assumed to be "
+              "boot.img in the directory specified by -system_image_dir.");
 DEFINE_int32(memory_mb, 2048,
              "Total amount of memory available for guest, MB.");
 std::string g_default_mempath{vsoc::GetDefaultMempath()};
@@ -97,11 +96,12 @@ DEFINE_string(x_display, "",
 
 DEFINE_string(system_image_dir, vsoc::DefaultGuestImagePath(""),
               "Location of the system partition images.");
-DEFINE_string(vendor_image, "", "Location of the vendor partition image.");
-DEFINE_string(product_image, "", "Location of the product partition image.");
 DEFINE_string(super_image, "", "Location of the super partition image.");
-DEFINE_string(system_ext_image, "", "Location of the system extension partition image.");
-DEFINE_string(composite_disk, "", "Location of the composite disk image.");
+DEFINE_string(misc_image, "",
+              "Location of the misc partition image. If the image does not "
+              "exist, a blank new misc partition image is created.");
+DEFINE_string(composite_disk, "", "Location of the composite disk image. "
+                                  "If empty, a composite disk is not used.");
 
 DEFINE_bool(deprecated_boot_completed, false, "Log boot completed message to"
             " host kernel. This is only used during transition of our clients."
@@ -150,23 +150,11 @@ DEFINE_string(adb_connector_binary,
               "Location of the adb_connector binary. Only relevant if "
               "-run_adb_connector is true");
 DEFINE_int32(vhci_port, GetPerInstanceDefault(0), "VHCI port to use for usb");
-DEFINE_string(guest_mac_address,
-              GetPerInstanceDefault("00:43:56:44:80:"), // 00:43:56:44:80:0x
-              "MAC address of the wifi interface to be created on the guest.");
-DEFINE_string(host_mac_address,
-              "42:00:00:00:00:00",
-              "MAC address of the wifi interface running on the host.");
 DEFINE_string(wifi_tap_name, "", // default handled on ParseCommandLine
               "The name of the tap interface to use for wifi");
 DEFINE_int32(vsock_guest_cid,
              vsoc::GetDefaultPerInstanceVsockCid(),
              "Guest identifier for vsock. Disabled if under 3.");
-
-// TODO(b/72969289) This should be generated
-DEFINE_string(dtb, "", "Path to the cuttlefish.dtb file");
-DEFINE_string(gsi_fstab,
-              vsoc::DefaultHostArtifactsPath("config/gsi.fstab"),
-              "Path to the GSI fstab file");
 
 DEFINE_string(uuid, vsoc::GetPerInstanceDefault(vsoc::kDefaultUuidPrefix),
               "UUID to use for the device. Random if not specified");
@@ -214,7 +202,12 @@ DEFINE_string(tombstone_receiver_binary,
               "Binary for the tombstone server");
 DEFINE_int32(tombstone_receiver_port, vsoc::GetPerInstanceDefault(5630),
              "The vsock port for tombstones");
+DEFINE_bool(use_bootloader, false, "Boots the device using a bootloader");
+DEFINE_string(bootloader, "", "Bootloader binary path");
+
 namespace {
+
+std::string kRamdiskConcatExt = ".concat";
 
 template<typename S, typename T>
 static std::string concat(const S& s, const T& t) {
@@ -231,9 +224,6 @@ bool ResolveInstanceFiles() {
 
   // If user did not specify location of either of these files, expect them to
   // be placed in --system_image_dir location.
-  std::string default_system_image = FLAGS_system_image_dir + "/system.img";
-  SetCommandLineOptionWithMode("system_image", default_system_image.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   std::string default_boot_image = FLAGS_system_image_dir + "/boot.img";
   SetCommandLineOptionWithMode("boot_image", default_boot_image.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
@@ -243,20 +233,17 @@ bool ResolveInstanceFiles() {
   std::string default_data_image = FLAGS_system_image_dir + "/userdata.img";
   SetCommandLineOptionWithMode("data_image", default_data_image.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  std::string default_vendor_image = FLAGS_system_image_dir + "/vendor.img";
-  SetCommandLineOptionWithMode("vendor_image", default_vendor_image.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   std::string default_metadata_image = FLAGS_system_image_dir + "/metadata.img";
   SetCommandLineOptionWithMode("metadata_image", default_metadata_image.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  std::string default_product_image = FLAGS_system_image_dir + "/product.img";
-  SetCommandLineOptionWithMode("product_image", default_product_image.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  std::string default_system_ext_image = FLAGS_system_image_dir + "/system_ext.img";
-  SetCommandLineOptionWithMode("system_ext_image", default_system_ext_image.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   std::string default_super_image = FLAGS_system_image_dir + "/super.img";
   SetCommandLineOptionWithMode("super_image", default_super_image.c_str(),
+                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  std::string default_misc_image = FLAGS_system_image_dir + "/misc.img";
+  SetCommandLineOptionWithMode("misc_image", default_misc_image.c_str(),
+                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  std::string default_composite_disk = FLAGS_system_image_dir + "/composite.img";
+  SetCommandLineOptionWithMode("composite_disk", default_composite_disk.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
 
   return true;
@@ -264,6 +251,11 @@ bool ResolveInstanceFiles() {
 
 std::string GetCuttlefishEnvPath() {
   return cvd::StringFromEnv("HOME", ".") + "/.cuttlefish.sh";
+}
+
+int GetHostPort() {
+  constexpr int kFirstHostPort = 6520;
+  return vsoc::GetPerInstanceDefault(kFirstHostPort);
 }
 
 // Initializes the config object and saves it to file. It doesn't return it, all
@@ -308,6 +300,7 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_gdb_flag(FLAGS_qemu_gdb);
   std::vector<std::string> adb = cvd::StrSplit(FLAGS_adb_mode, ',');
   tmp_config_obj.set_adb_mode(std::set<std::string>(adb.begin(), adb.end()));
+  tmp_config_obj.set_host_port(GetHostPort());
   tmp_config_obj.set_adb_ip_and_port("127.0.0.1:" + std::to_string(GetHostPort()));
 
   tmp_config_obj.set_device_title(FLAGS_device_title);
@@ -332,34 +325,13 @@ bool InitializeCuttlefishConfiguration(
     ramdisk_path = "";
   }
 
-  // Fallback for older builds, or builds from branches without DAP
-  if (!FLAGS_super_image.empty() && !cvd::FileHasContent(FLAGS_super_image.c_str())) {
-    LOG(INFO) << "No super image detected; assuming non-DAP build";
-    FLAGS_super_image.clear();
-  }
-
-  // This needs to be done here because the dtb path depends on the presence of
-  // the ramdisk. If we are booting a super image, the fstab is passed through
-  // from the ramdisk, it should never be defined by dt.
-  if (FLAGS_super_image.empty() && FLAGS_dtb.empty()) {
-    if (use_ramdisk) {
-      FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/initrd-root.dtb");
-    } else {
-      if (FLAGS_composite_disk.empty()) {
-        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/system-root.dtb");
-      } else {
-        FLAGS_dtb = vsoc::DefaultHostArtifactsPath("config/composite-system-root.dtb");
-      }
-    }
-  }
-
   tmp_config_obj.add_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
 
   if (use_ramdisk) {
     if (FLAGS_composite_disk.empty()) {
       tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
     } else {
-      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab.composite");
     }
   } else {
     if (FLAGS_composite_disk.empty()) {
@@ -367,15 +339,7 @@ bool InitializeCuttlefishConfiguration(
       tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab");
     } else {
       tmp_config_obj.add_kernel_cmdline("root=/dev/vda1");
-      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=composite-fstab");
-    }
-  }
-
-  if (!FLAGS_super_image.empty()) {
-    if (FLAGS_composite_disk.empty()) {
-      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=vda");
-    } else {
-      tmp_config_obj.add_kernel_cmdline("androidboot.super_partition=super");
+      tmp_config_obj.add_kernel_cmdline("androidboot.fstab_name=fstab.composite");
     }
   }
 
@@ -423,36 +387,24 @@ bool InitializeCuttlefishConfiguration(
     tmp_config_obj.add_kernel_cmdline(FLAGS_extra_kernel_cmdline);
   }
 
-  if (FLAGS_super_image.empty()) {
-    tmp_config_obj.set_dtb_path(FLAGS_dtb);
-    tmp_config_obj.set_gsi_fstab_path(FLAGS_gsi_fstab);
-  } else {
-    tmp_config_obj.set_dtb_path("");
-    tmp_config_obj.set_gsi_fstab_path("");
-  }
-
   if (!FLAGS_composite_disk.empty()) {
     tmp_config_obj.set_virtual_disk_paths({FLAGS_composite_disk});
-  } else if(!FLAGS_super_image.empty()) {
+  } else {
     tmp_config_obj.set_virtual_disk_paths({
       FLAGS_super_image,
       FLAGS_data_image,
       FLAGS_cache_image,
       FLAGS_metadata_image,
     });
-  } else {
-    tmp_config_obj.set_virtual_disk_paths({
-      FLAGS_system_image,
-      FLAGS_data_image,
-      FLAGS_cache_image,
-      FLAGS_metadata_image,
-      FLAGS_vendor_image,
-      FLAGS_product_image,
-      FLAGS_system_ext_image,
-    });
   }
 
   tmp_config_obj.set_ramdisk_image_path(ramdisk_path);
+  if(FLAGS_initramfs_path.size() > 0) {
+    tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
+    tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
+  } else {
+    tmp_config_obj.set_final_ramdisk_path(ramdisk_path);
+  }
 
   tmp_config_obj.set_mempath(FLAGS_mempath);
   tmp_config_obj.set_ivshmem_qemu_socket_path(
@@ -461,13 +413,14 @@ bool InitializeCuttlefishConfiguration(
       tmp_config_obj.PerInstancePath("ivshmem_socket_client"));
   tmp_config_obj.set_ivshmem_vector_count(memory_layout.GetRegions().size());
 
-  if (AdbUsbEnabled(tmp_config_obj)) {
+  if (tmp_config_obj.adb_mode().count(vsoc::AdbMode::Usb) > 0) {
     tmp_config_obj.set_usb_v1_socket_name(tmp_config_obj.PerInstancePath("usb-v1"));
     tmp_config_obj.set_vhci_port(FLAGS_vhci_port);
     tmp_config_obj.set_usb_ip_socket_name(tmp_config_obj.PerInstancePath("usb-ip"));
   }
 
   tmp_config_obj.set_kernel_log_pipe_name(tmp_config_obj.PerInstancePath("kernel-log"));
+  tmp_config_obj.set_console_pipe_name(tmp_config_obj.PerInstancePath("console-pipe"));
   tmp_config_obj.set_deprecated_boot_completed(FLAGS_deprecated_boot_completed);
   tmp_config_obj.set_console_path(tmp_config_obj.PerInstancePath("console"));
   tmp_config_obj.set_logcat_path(tmp_config_obj.PerInstancePath("logcat"));
@@ -481,9 +434,6 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_mobile_tap_name(FLAGS_mobile_tap_name);
 
   tmp_config_obj.set_wifi_tap_name(FLAGS_wifi_tap_name);
-
-  tmp_config_obj.set_wifi_guest_mac_addr(FLAGS_guest_mac_address);
-  tmp_config_obj.set_wifi_host_mac_addr(FLAGS_host_mac_address);
 
   tmp_config_obj.set_vsock_guest_cid(FLAGS_vsock_guest_cid);
 
@@ -519,7 +469,7 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_blank_data_image_mb(FLAGS_blank_data_image_mb);
   tmp_config_obj.set_blank_data_image_fmt(FLAGS_blank_data_image_fmt);
 
-  if(!AdbUsbEnabled(tmp_config_obj)) {
+  if(tmp_config_obj.adb_mode().count(vsoc::AdbMode::Usb) == 0) {
     tmp_config_obj.disable_usb_adb();
   }
 
@@ -544,6 +494,9 @@ bool InitializeCuttlefishConfiguration(
   } else {
     tmp_config_obj.add_kernel_cmdline("androidboot.tombstone_transmit=0");
   }
+
+  tmp_config_obj.set_use_bootloader(FLAGS_use_bootloader);
+  tmp_config_obj.set_bootloader(FLAGS_bootloader);
 
   tmp_config_obj.set_cuttlefish_env_path(GetCuttlefishEnvPath());
 
@@ -618,21 +571,9 @@ void SetDefaultFlagsForCrosvm() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-
-  if (!FLAGS_composite_disk.empty()) {
-    std::string composite_gsi_fstab =
-        vsoc::DefaultHostArtifactsPath("config/composite-gsi.fstab");
-    SetCommandLineOptionWithMode("gsi_fstab", composite_gsi_fstab.c_str(),
-                                 google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  }
 }
 
 bool ParseCommandLineFlags(int* argc, char*** argv) {
-  // The config_file is created by the launcher, so the launcher is the only
-  // host process that doesn't use the flag.
-  // Set the default to empty.
-  google::SetCommandLineOptionWithMode("config_file", "",
-                                       gflags::SET_FLAGS_DEFAULT);
   google::ParseCommandLineNonHelpFlags(argc, argv, true);
   bool invalid_manager = false;
   if (FLAGS_vm_manager == vm_manager::QemuManager::name()) {
@@ -693,23 +634,25 @@ bool DecompressKernel(const std::string& src, const std::string& dst) {
   auto decomp_proc = decomp_cmd.Start(false);
   return decomp_proc.Started() && decomp_proc.Wait() == 0;
 }
+
+void ValidateAdbModeFlag(const vsoc::CuttlefishConfig& config) {
+  auto adb_modes = config.adb_mode();
+  adb_modes.erase(vsoc::AdbMode::Unknown);
+  if (adb_modes.size() < 1) {
+    LOG(INFO) << "ADB not enabled";
+  }
+}
+
 } // namespace
 
 namespace {
 
 std::vector<ImagePartition> disk_config() {
   std::vector<ImagePartition> partitions;
-  if (FLAGS_super_image.empty()) {
-    partitions.push_back(ImagePartition {
-      .label = "system",
-      .image_file_path = FLAGS_system_image,
-    });
-  } else {
-    partitions.push_back(ImagePartition {
-      .label = "super",
-      .image_file_path = FLAGS_super_image,
-    });
-  }
+  partitions.push_back(ImagePartition {
+    .label = "super",
+    .image_file_path = FLAGS_super_image,
+  });
   partitions.push_back(ImagePartition {
     .label = "userdata",
     .image_file_path = FLAGS_data_image,
@@ -722,23 +665,13 @@ std::vector<ImagePartition> disk_config() {
     .label = "metadata",
     .image_file_path = FLAGS_metadata_image,
   });
-  if (FLAGS_super_image.empty()) {
-    partitions.push_back(ImagePartition {
-      .label = "product",
-      .image_file_path = FLAGS_product_image,
-    });
-    partitions.push_back(ImagePartition {
-      .label = "vendor",
-      .image_file_path = FLAGS_vendor_image,
-    });
-    partitions.push_back(ImagePartition {
-      .label = "system_ext",
-      .image_file_path = FLAGS_system_ext_image,
-    });
-  }
   partitions.push_back(ImagePartition {
     .label = "boot",
     .image_file_path = FLAGS_boot_image,
+  });
+  partitions.push_back(ImagePartition {
+    .label = "misc",
+    .image_file_path = FLAGS_misc_image
   });
   return partitions;
 }
@@ -746,6 +679,12 @@ std::vector<ImagePartition> disk_config() {
 bool ShouldCreateCompositeDisk() {
   if (FLAGS_composite_disk.empty()) {
     return false;
+  }
+  if (FLAGS_vm_manager == vm_manager::CrosvmManager::name()) {
+    // The crosvm implementation is very fast to rebuild but also more brittle due to being split
+    // into multiple files. The QEMU implementation is slow to build, but completely self-contained
+    // at that point. Therefore, always rebuild on crosvm but check if it is necessary for QEMU.
+    return true;
   }
   auto composite_age = cvd::FileModificationTime(FLAGS_composite_disk);
   for (auto& partition : disk_config()) {
@@ -759,26 +698,47 @@ bool ShouldCreateCompositeDisk() {
   return false;
 }
 
-void CreateCompositeDisk() {
+bool ConcatRamdisks(const std::string& new_ramdisk_path, const std::string& ramdisk_a_path,
+  const std::string& ramdisk_b_path) {
+  // clear out file of any pre-existing content
+  std::ofstream new_ramdisk(new_ramdisk_path, std::ios_base::binary | std::ios_base::trunc);
+  std::ifstream ramdisk_a(ramdisk_a_path, std::ios_base::binary);
+  std::ifstream ramdisk_b(ramdisk_b_path, std::ios_base::binary);
+
+  if(!new_ramdisk.is_open() || !ramdisk_a.is_open() || !ramdisk_b.is_open()) {
+    return false;
+  }
+
+  new_ramdisk << ramdisk_a.rdbuf() << ramdisk_b.rdbuf();
+  return true;
+}
+
+void CreateCompositeDisk(const vsoc::CuttlefishConfig& config) {
   if (FLAGS_composite_disk.empty()) {
     LOG(FATAL) << "asked to create composite disk, but path was empty";
   }
-  aggregate_image(disk_config(), FLAGS_composite_disk);
+  if (FLAGS_vm_manager == vm_manager::CrosvmManager::name()) {
+    std::string header_path = config.PerInstancePath("gpt_header.img");
+    std::string footer_path = config.PerInstancePath("gpt_footer.img");
+    create_composite_disk(disk_config(), header_path, footer_path, FLAGS_composite_disk);
+  } else {
+    aggregate_image(disk_config(), FLAGS_composite_disk);
+  }
 }
 
 } // namespace
 
-vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
+const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
   if (!ParseCommandLineFlags(argc, argv)) {
     LOG(ERROR) << "Failed to parse command arguments";
-    exit(LauncherExitCodes::kArgumentParsingError);
+    exit(AssemblerExitCodes::kArgumentParsingError);
   }
 
   // Clean up prior files before saving the config file (doing it after would
   // delete it)
   if (!CleanPriorFiles()) {
     LOG(ERROR) << "Failed to clean prior files";
-    exit(LauncherExitCodes::kPrioFilesCleanupError);
+    exit(AssemblerExitCodes::kPrioFilesCleanupError);
   }
   // Create instance directory if it doesn't exist.
   if (!cvd::DirectoryExists(FLAGS_instance_dir.c_str())) {
@@ -786,7 +746,7 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
     if (mkdir(FLAGS_instance_dir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) < 0) {
       LOG(ERROR) << "Failed to create instance directory: "
                  << FLAGS_instance_dir << ". Error: " << errno;
-      exit(LauncherExitCodes::kInstanceDirCreationError);
+      exit(AssemblerExitCodes::kInstanceDirCreationError);
     }
   }
 
@@ -799,13 +759,13 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
 
   if (!InitializeCuttlefishConfiguration(*boot_img_unpacker)) {
     LOG(ERROR) << "Failed to initialize configuration";
-    exit(LauncherExitCodes::kCuttlefishConfigurationInitError);
+    exit(AssemblerExitCodes::kCuttlefishConfigurationInitError);
   }
   // Do this early so that the config object is ready for anything that needs it
   auto config = vsoc::CuttlefishConfig::Get();
   if (!config) {
     LOG(ERROR) << "Failed to obtain config singleton";
-    exit(LauncherExitCodes::kCuttlefishConfigurationInitError);
+    exit(AssemblerExitCodes::kCuttlefishConfigurationInitError);
   }
 
   if (!boot_img_unpacker->Unpack(config->ramdisk_image_path(),
@@ -813,18 +773,31 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
                                      ? config->kernel_image_path()
                                      : "")) {
     LOG(ERROR) << "Failed to unpack boot image";
-    exit(LauncherExitCodes::kBootImageUnpackError);
+    exit(AssemblerExitCodes::kBootImageUnpackError);
+  }
+
+  if(config->initramfs_path().size() != 0) {
+    if(!ConcatRamdisks(config->final_ramdisk_path(), config->ramdisk_image_path(),
+        config->initramfs_path())) {
+      LOG(ERROR) << "Failed to concatenate ramdisk and initramfs";
+      exit(AssemblerExitCodes::kInitRamFsConcatError);
+    }
   }
 
   if (config->decompress_kernel()) {
     if (!DecompressKernel(config->kernel_image_path(),
         config->decompressed_kernel_image_path())) {
       LOG(ERROR) << "Failed to decompress kernel";
-      exit(LauncherExitCodes::kKernelDecompressError);
+      exit(AssemblerExitCodes::kKernelDecompressError);
     }
   }
 
   ValidateAdbModeFlag(*config);
+
+  // Create misc if necessary
+  if (!InitializeMiscImage(FLAGS_misc_image)) {
+    exit(cvd::kCuttlefishConfigurationInitError);
+  }
 
   // Create data if necessary
   if (!ApplyDataImagePolicy(*config, FLAGS_data_image)) {
@@ -836,7 +809,7 @@ vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
   }
 
   if (ShouldCreateCompositeDisk()) {
-    CreateCompositeDisk();
+    CreateCompositeDisk(*config);
   }
 
   // Check that the files exist

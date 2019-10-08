@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+#include <sys/types.h>
+#include <sys/wait.h>
+
 #include <assert.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 
 #include <map>
@@ -23,7 +27,7 @@
 #include <glog/logging.h>
 
 #include "common/libs/fs/shared_select.h"
-#include "host/commands/launch/process_monitor.h"
+#include "host/commands/run_cvd/process_monitor.h"
 
 namespace cvd {
 
@@ -64,7 +68,7 @@ ProcessMonitor::ProcessMonitor() {
 }
 
 void ProcessMonitor::StartSubprocess(Command cmd, OnSocketReadyCb callback) {
-  auto proc = cmd.Start(true);
+  auto proc = cmd.StartInGroup(true);
   if (!proc.Started()) {
     LOG(ERROR) << "Failed to start process";
     return;
@@ -88,6 +92,35 @@ void ProcessMonitor::MonitorExistingSubprocess(Command cmd, Subprocess proc,
   NotifyThread(thread_comm_main_);
 }
 
+bool ProcessMonitor::StopMonitoredProcesses() {
+  // Because the mutex is held while this function executes, the restarter
+  // thread is kept blocked and by the time it resumes execution there are no
+  // more processes to monitor
+  std::lock_guard<std::mutex> lock(processes_mutex_);
+  bool result = true;
+  // Processes were started in the order they appear in the vector, stop them in
+  // reverse order for symmetry.
+  for (auto entry_it = monitored_processes_.rbegin();
+       entry_it != monitored_processes_.rend(); ++entry_it) {
+    auto& entry = *entry_it;
+    result = result && entry.proc->Stop();
+  }
+  // Wait for all processes to actually exit.
+  for (auto& entry : monitored_processes_) {
+    // Most processes are being killed by signals, calling Wait(void) would be
+    // too verbose on the logs.
+    int wstatus;
+    auto ret = entry.proc->Wait(&wstatus, 0);
+    if (ret < 0) {
+      LOG(WARNING) << "Failed to wait for process "
+                   << entry.cmd->GetShortName();
+    }
+  }
+  // Clear the list to ensure they are not started again
+  monitored_processes_.clear();
+  return result;
+}
+
 bool ProcessMonitor::RestartOnExitCb(MonitorEntry* entry) {
   // Make sure the process actually exited
   char buffer[16];
@@ -108,24 +141,21 @@ bool ProcessMonitor::RestartOnExitCb(MonitorEntry* entry) {
   // None of the error conditions specified on waitpid(2) apply
   assert(wait_ret > 0);
   if (WIFEXITED(wstatus)) {
-    LOG(INFO) << "Subprocess " << entry->cmd->GetShortName() << " ("
-              << wait_ret << ") has exited with exit code "
-              << WEXITSTATUS(wstatus);
+    LOG(INFO) << "Subprocess " << entry->cmd->GetShortName() << " (" << wait_ret
+              << ") has exited with exit code " << WEXITSTATUS(wstatus);
   } else if (WIFSIGNALED(wstatus)) {
     LOG(ERROR) << "Subprocess " << entry->cmd->GetShortName() << " ("
-               << wait_ret << ") was interrupted by a signal: "
-               << WTERMSIG(wstatus);
+               << wait_ret
+               << ") was interrupted by a signal: " << WTERMSIG(wstatus);
   } else {
-    LOG(INFO) << "subprocess " << entry->cmd->GetShortName() << " ("
-               << wait_ret << ") has exited for unknown reasons";
+    LOG(INFO) << "subprocess " << entry->cmd->GetShortName() << " (" << wait_ret
+              << ") has exited for unknown reasons";
   }
   entry->proc.reset(new Subprocess(entry->cmd->Start(true)));
   return true;
 }
 
-bool ProcessMonitor::DoNotMonitorCb(MonitorEntry*) {
-  return false;
-}
+bool ProcessMonitor::DoNotMonitorCb(MonitorEntry*) { return false; }
 
 void ProcessMonitor::MonitorRoutine() {
   LOG(INFO) << "Started monitoring subprocesses";
@@ -134,9 +164,9 @@ void ProcessMonitor::MonitorRoutine() {
     read_set.Set(thread_comm_monitor_);
     {
       std::lock_guard<std::mutex> lock(processes_mutex_);
-      for (auto& monitored_process: monitored_processes_) {
+      for (auto& monitored_process : monitored_processes_) {
         auto control_socket = monitored_process.proc->control_socket();
-        if (!control_socket->IsOpen())  {
+        if (!control_socket->IsOpen()) {
           LOG(ERROR) << "The control socket for "
                      << monitored_process.cmd->GetShortName()
                      << " is closed, it's effectively NOT being monitored";

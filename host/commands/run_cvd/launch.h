@@ -3,12 +3,8 @@
 #include <functional>
 
 #include "common/libs/utils/subprocess.h"
-#include "host/commands/launch/process_monitor.h"
+#include "host/commands/run_cvd/process_monitor.h"
 #include "host/libs/config/cuttlefish_config.h"
-
-int GetHostPort();
-bool AdbUsbEnabled(const vsoc::CuttlefishConfig& config);
-void ValidateAdbModeFlag(const vsoc::CuttlefishConfig& config);
 
 cvd::Command GetIvServerCommand(const vsoc::CuttlefishConfig& config);
 std::vector <cvd::SharedFD> LaunchKernelLogMonitor(

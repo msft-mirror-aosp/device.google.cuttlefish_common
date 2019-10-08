@@ -28,6 +28,13 @@ namespace vsoc {
 constexpr char kDefaultUuidPrefix[] = "699acfc4-c8c4-11e7-882b-5065f31dc1";
 constexpr char kCuttlefishConfigEnvVarName[] = "CUTTLEFISH_CONFIG_FILE";
 constexpr char kVsocUserPrefix[] = "vsoc-";
+constexpr char kBootStartedMessage[] ="VIRTUAL_DEVICE_BOOT_STARTED";
+constexpr char kBootCompletedMessage[] = "VIRTUAL_DEVICE_BOOT_COMPLETED";
+constexpr char kBootFailedMessage[] = "VIRTUAL_DEVICE_BOOT_FAILED";
+constexpr char kMobileNetworkConnectedMessage[] =
+    "VIRTUAL_DEVICE_NETWORK_MOBILE_CONNECTED";
+constexpr char kWifiConnectedMessage[] =
+    "VIRTUAL_DEVICE_NETWORK_WIFI_CONNECTED";
 
 enum class AdbMode {
   Tunnel,
@@ -41,7 +48,7 @@ enum class AdbMode {
 // Holds the configuration of the cuttlefish instances.
 class CuttlefishConfig {
  public:
-  static CuttlefishConfig* Get();
+  static const CuttlefishConfig* Get();
 
   CuttlefishConfig();
   ~CuttlefishConfig();
@@ -138,14 +145,14 @@ class CuttlefishConfig {
   std::string ramdisk_image_path() const;
   void set_ramdisk_image_path(const std::string& ramdisk_image_path);
 
+  std::string initramfs_path() const;
+  void set_initramfs_path(const std::string& initramfs_path);
+
+  std::string final_ramdisk_path() const;
+  void set_final_ramdisk_path(const std::string& final_ramdisk_path);
+
   std::vector<std::string> virtual_disk_paths() const;
   void set_virtual_disk_paths(const std::vector<std::string>& disk_paths);
-
-  std::string dtb_path() const;
-  void set_dtb_path(const std::string& dtb_path);
-
-  std::string gsi_fstab_path() const;
-  void set_gsi_fstab_path(const std::string& path);
 
   std::string mempath() const;
   void set_mempath(const std::string& mempath);
@@ -174,6 +181,9 @@ class CuttlefishConfig {
 
   std::string kernel_log_pipe_name() const;
   void set_kernel_log_pipe_name(const std::string& kernel_log_pipe_name);
+
+  std::string console_pipe_name() const;
+  void set_console_pipe_name(const std::string& console_pipe_name);
 
   bool deprecated_boot_completed() const;
   void set_deprecated_boot_completed(bool deprecated_boot_completed);
@@ -206,12 +216,6 @@ class CuttlefishConfig {
   std::string wifi_tap_name() const;
   void set_wifi_tap_name(const std::string& wifi_tap_name);
 
-  std::string wifi_guest_mac_addr() const;
-  void set_wifi_guest_mac_addr(const std::string& wifi_guest_mac_addr);
-
-  std::string wifi_host_mac_addr() const;
-  void set_wifi_host_mac_addr(const std::string& wifi_host_mac_addr);
-
   void set_vsock_guest_cid(int vsock_guest_cid);
   int vsock_guest_cid() const;
 
@@ -223,6 +227,9 @@ class CuttlefishConfig {
 
   void set_adb_mode(const std::set<std::string>& modes);
   std::set<AdbMode> adb_mode() const;
+
+  void set_host_port(int host_port);
+  int host_port() const;
 
   void set_adb_ip_and_port(const std::string& ip_port);
   std::string adb_ip_and_port() const;
@@ -325,6 +332,12 @@ class CuttlefishConfig {
 
   void set_tombstone_receiver_port(int port);
   int tombstone_receiver_port() const;
+
+  void set_use_bootloader(bool use_bootloader);
+  bool use_bootloader() const;
+
+  void set_bootloader(const std::string& bootloader_path);
+  std::string bootloader() const;
 
   bool enable_ivserver() const;
 

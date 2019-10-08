@@ -54,7 +54,14 @@ namespace {
 std::set<pid_t> GetCandidateProcessGroups() {
   std::string cmd = "fuser";
   // Add the instance directory
-  cmd += " " + cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime/*";
+  auto instance_dir = cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
+  cmd += " " + instance_dir;
+  // Add files in instance dir
+  cmd += " " + instance_dir + "/*";
+  // Add files in the tombstone directory
+  cmd += " " + instance_dir + "/tombstones/*";
+  // Add files in the internal directory
+  cmd += ((" " + instance_dir + "/") + vsoc::kInternalDirName) + "/*";
   // Add the shared memory file
   cmd += " " + vsoc::GetPerInstanceDefault("/dev/shm/cvd-");
   std::shared_ptr<FILE> cmd_out(popen(cmd.c_str(), "r"), pclose);

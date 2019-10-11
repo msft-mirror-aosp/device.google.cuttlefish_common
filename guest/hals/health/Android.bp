@@ -38,8 +38,6 @@ cc_binary {
         "libbase",
         "libcutils",
         "libhidlbase",
-        "libhidltransport",
-        "libhwbinder",
         "libutils",
         "android.hardware.health@2.0",
     ],
@@ -47,4 +45,8 @@ cc_binary {
     header_libs: ["libhealthd_headers"],
 
     defaults: ["enabled_on_p_and_later"],
+
+    overrides: [
+        "healthd",
+    ],
 }

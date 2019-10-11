@@ -37,8 +37,8 @@
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <host/libs/vm_manager/crosvm_manager.h>
 
+#include "common/libs/fs/shared_buf.h"
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/fs/shared_select.h"
 #include "common/libs/strings/str_split.h"
@@ -48,20 +48,18 @@
 #include "common/libs/utils/size_utils.h"
 #include "common/vsoc/lib/vsoc_memory.h"
 #include "common/vsoc/shm/screen_layout.h"
-#include "host/commands/launch/boot_image_unpacker.h"
-#include "host/commands/launch/data_image.h"
-#include "host/commands/launch/flags.h"
-#include "host/commands/launch/launch.h"
-#include "host/commands/launch/launcher_defs.h"
-#include "host/commands/launch/process_monitor.h"
-#include "host/commands/launch/vsoc_shared_memory.h"
+#include "host/commands/run_cvd/launch.h"
+#include "host/commands/run_cvd/runner_defs.h"
+#include "host/commands/run_cvd/process_monitor.h"
+#include "host/commands/run_cvd/vsoc_shared_memory.h"
 #include "host/libs/config/cuttlefish_config.h"
 #include "host/commands/kernel_log_monitor/kernel_log_server.h"
+#include <host/libs/vm_manager/crosvm_manager.h>
 #include "host/libs/vm_manager/vm_manager.h"
 #include "host/libs/vm_manager/qemu_manager.h"
 
 using vsoc::GetPerInstanceDefault;
-using cvd::LauncherExitCodes;
+using cvd::RunnerExitCodes;
 
 namespace {
 
@@ -131,7 +129,7 @@ class CvdBootStateMachine {
   }
 
  private:
-  void SendExitCode(cvd::LauncherExitCodes exit_code) {
+  void SendExitCode(cvd::RunnerExitCodes exit_code) {
     fg_launcher_pipe_->Write(&exit_code, sizeof(exit_code));
     // The foreground process will exit after receiving the exit code, if we try
     // to write again we'll get a SIGPIPE
@@ -140,11 +138,11 @@ class CvdBootStateMachine {
   bool MaybeWriteToForegroundLauncher() {
     if (fg_launcher_pipe_->IsOpen()) {
       if (BootCompleted()) {
-        SendExitCode(cvd::LauncherExitCodes::kSuccess);
+        SendExitCode(cvd::RunnerExitCodes::kSuccess);
       } else if (state_ & kGuestBootFailed) {
-        SendExitCode(cvd::LauncherExitCodes::kVirtualDeviceBootFailed);
+        SendExitCode(cvd::RunnerExitCodes::kVirtualDeviceBootFailed);
       } else if (state_ & kE2eTestFailed) {
-        SendExitCode(cvd::LauncherExitCodes::kE2eTestFailed);
+        SendExitCode(cvd::RunnerExitCodes::kE2eTestFailed);
       } else {
         // No final state was reached
         return false;
@@ -206,10 +204,10 @@ bool WriteCuttlefishEnvironment(const vsoc::CuttlefishConfig& config) {
   std::string config_env = "export CUTTLEFISH_PER_INSTANCE_PATH=\"" +
                            config.PerInstancePath(".") + "\"\n";
   config_env += "export ANDROID_SERIAL=";
-  if (AdbUsbEnabled(config)) {
+  if (config.adb_mode().count(vsoc::AdbMode::Usb) > 0) {
     config_env += config.serial_number();
   } else {
-    config_env += "127.0.0.1:" + std::to_string(GetHostPort());
+    config_env += config.adb_ip_and_port();
   }
   config_env += "\n";
   env->Write(config_env.c_str(), config_env.size());
@@ -229,27 +227,32 @@ cvd::SharedFD DaemonizeLauncher(const vsoc::CuttlefishConfig& config) {
     // Explicitly close here, otherwise we may end up reading forever if the
     // child process dies.
     write_end->Close();
-    LauncherExitCodes exit_code;
+    RunnerExitCodes exit_code;
     auto bytes_read = read_end->Read(&exit_code, sizeof(exit_code));
     if (bytes_read != sizeof(exit_code)) {
       LOG(ERROR) << "Failed to read a complete exit code, read " << bytes_read
                  << " bytes only instead of the expected " << sizeof(exit_code);
-      exit_code = LauncherExitCodes::kPipeIOError;
-    } else if (exit_code == LauncherExitCodes::kSuccess) {
+      exit_code = RunnerExitCodes::kPipeIOError;
+    } else if (exit_code == RunnerExitCodes::kSuccess) {
       LOG(INFO) << "Virtual device booted successfully";
-    } else if (exit_code == LauncherExitCodes::kVirtualDeviceBootFailed) {
+    } else if (exit_code == RunnerExitCodes::kVirtualDeviceBootFailed) {
       LOG(ERROR) << "Virtual device failed to boot";
-    } else if (exit_code == LauncherExitCodes::kE2eTestFailed) {
+    } else if (exit_code == RunnerExitCodes::kE2eTestFailed) {
       LOG(ERROR) << "Host VSoC region end to end test failed";
     } else {
       LOG(ERROR) << "Unexpected exit code: " << exit_code;
+    }
+    if (exit_code == RunnerExitCodes::kSuccess) {
+      LOG(INFO) << vsoc::kBootCompletedMessage;
+    } else {
+      LOG(INFO) << vsoc::kBootFailedMessage;
     }
     std::exit(exit_code);
   } else {
     // The child returns the write end of the pipe
     if (daemon(/*nochdir*/ 1, /*noclose*/ 1) != 0) {
       LOG(ERROR) << "Failed to daemonize child process: " << strerror(errno);
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
     // Redirect standard I/O
     auto log_path = config.launcher_log_path();
@@ -258,24 +261,24 @@ cvd::SharedFD DaemonizeLauncher(const vsoc::CuttlefishConfig& config) {
                             S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
     if (!log->IsOpen()) {
       LOG(ERROR) << "Failed to create launcher log file: " << log->StrError();
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
     auto dev_null = cvd::SharedFD::Open("/dev/null", O_RDONLY);
     if (!dev_null->IsOpen()) {
       LOG(ERROR) << "Failed to open /dev/null: " << dev_null->StrError();
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
     if (dev_null->UNMANAGED_Dup2(0) < 0) {
       LOG(ERROR) << "Failed dup2 stdin: " << dev_null->StrError();
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
     if (log->UNMANAGED_Dup2(1) < 0) {
       LOG(ERROR) << "Failed dup2 stdout: " << log->StrError();
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
     if (log->UNMANAGED_Dup2(2) < 0) {
       LOG(ERROR) << "Failed dup2 seterr: " << log->StrError();
-      std::exit(LauncherExitCodes::kDaemonizationError);
+      std::exit(RunnerExitCodes::kDaemonizationError);
     }
 
     read_end->Close();
@@ -283,41 +286,8 @@ cvd::SharedFD DaemonizeLauncher(const vsoc::CuttlefishConfig& config) {
   }
 }
 
-// Stops the device. If this function is successful it returns on a child of the
-// launcher (after it killed the laucher) and it should exit immediately
-bool StopCvd(vm_manager::VmManager* vm_manager) {
-  vm_manager->Stop();
-  auto pgid = getpgid(0);
-  auto child_pid = fork();
-  if (child_pid > 0) {
-    // The parent just waits for the child to kill it.
-    int wstatus;
-    waitpid(child_pid, &wstatus, 0);
-    LOG(ERROR) << "The forked child exited before delivering signal with "
-                  "status: "
-               << wstatus;
-    // If waitpid returns it means the child exited before the signal was
-    // delivered, notify the client of the error and continue serving
-    return false;
-  } else if (child_pid == 0) {
-    // The child makes sure it is in a different process group before
-    // killing everyone on its parent's
-    // This call should never fail (see SETPGID(2))
-    if (setpgid(0, 0) != 0) {
-      LOG(ERROR) << "setpgid failed (" << strerror(errno)
-                 << ") the launcher's child is about to kill itself";
-    }
-    killpg(pgid, SIGKILL);
-    return true;
-  } else {
-    // The fork failed, the system is in pretty bad shape
-    LOG(FATAL) << "Unable to fork before on Stop: " << strerror(errno);
-    return false;
-  }
-}
-
 void ServerLoop(cvd::SharedFD server,
-                vm_manager::VmManager* vm_manager) {
+                cvd::ProcessMonitor* process_monitor) {
   while (true) {
     // TODO: use select to handle simultaneous connections.
     auto client = cvd::SharedFD::Accept(*server);
@@ -325,7 +295,7 @@ void ServerLoop(cvd::SharedFD server,
     while (client->IsOpen() && client->Read(&action, sizeof(action)) > 0) {
       switch (action) {
         case cvd::LauncherAction::kStop:
-          if (StopCvd(vm_manager)) {
+          if (process_monitor->StopMonitoredProcesses()) {
             auto response = cvd::LauncherResponse::kSuccess;
             client->Write(&response, sizeof(response));
             std::exit(0);
@@ -343,12 +313,63 @@ void ServerLoop(cvd::SharedFD server,
     }
   }
 }
+
+std::string GetConfigFilePath(const vsoc::CuttlefishConfig& config) {
+  return config.PerInstancePath("cuttlefish_config.json");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   ::android::base::InitLogging(argv, android::base::StderrLogger);
+  google::ParseCommandLineFlags(&argc, &argv, false);
 
-  auto config = InitFilesystemAndCreateConfig(&argc, &argv);
+  if (isatty(0)) {
+    LOG(FATAL) << "stdin was a tty, expected to be passed the output of a previous stage. "
+               << "Did you mean to run launch_cvd?";
+    return cvd::RunnerExitCodes::kInvalidHostConfiguration;
+  } else {
+    int error_num = errno;
+    if (error_num == EBADF) {
+      LOG(FATAL) << "stdin was not a valid file descriptor, expected to be passed the output "
+                 << "of assemble_cvd. Did you mean to run launch_cvd?";
+      return cvd::RunnerExitCodes::kInvalidHostConfiguration;
+    }
+  }
+
+  std::string input_files_str;
+  {
+    auto input_fd = cvd::SharedFD::Dup(0);
+    auto bytes_read = cvd::ReadAll(input_fd, &input_files_str);
+    if (bytes_read < 0) {
+      LOG(FATAL) << "Failed to read input files. Error was \"" << input_fd->StrError() << "\"";
+    }
+  }
+  std::vector<std::string> input_files = cvd::StrSplit(input_files_str, '\n');
+  bool found_config = false;
+  for (const auto& file : input_files) {
+    if (file.find("cuttlefish_config.json") != std::string::npos) {
+      found_config = true;
+      setenv(vsoc::kCuttlefishConfigEnvVarName, file.c_str(), /* overwrite */ false);
+    }
+  }
+  if (!found_config) {
+    return RunnerExitCodes::kCuttlefishConfigurationInitError;
+  }
+
+  auto config = vsoc::CuttlefishConfig::Get();
+
+  // Change working directory to the instance directory as early as possible to
+  // ensure all host processes have the same working dir. This helps stop_cvd
+  // find the running processes when it can't establish a communication with the
+  // launcher.
+  auto chdir_ret = chdir(config->instance_dir().c_str());
+  if (chdir_ret != 0) {
+    auto error = errno;
+    LOG(ERROR) << "Unable to change dir into instance directory ("
+               << config->instance_dir() << "): " << strerror(error);
+    return RunnerExitCodes::kInstanceDirCreationError;
+  }
 
   auto vm_manager = vm_manager::VmManager::Get(config->vm_manager(), config);
 
@@ -362,7 +383,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "You may need to logout for the changes to take effect"
               << std::endl;
-    return LauncherExitCodes::kInvalidHostConfiguration;
+    return RunnerExitCodes::kInvalidHostConfiguration;
   }
 
   if (!WriteCuttlefishEnvironment(*config)) {
@@ -386,13 +407,13 @@ int main(int argc, char** argv) {
   if (!launcher_monitor_socket->IsOpen()) {
     LOG(ERROR) << "Error when opening launcher server: "
                << launcher_monitor_socket->StrError();
-    return cvd::LauncherExitCodes::kMonitorCreationFailed;
+    return cvd::RunnerExitCodes::kMonitorCreationFailed;
   }
   cvd::SharedFD foreground_launcher_pipe;
   if (config->run_as_daemon()) {
     foreground_launcher_pipe = DaemonizeLauncher(*config);
     if (!foreground_launcher_pipe->IsOpen()) {
-      return LauncherExitCodes::kDaemonizationError;
+      return RunnerExitCodes::kDaemonizationError;
     }
   } else {
     // Make sure the launcher runs in its own process group even when running in
@@ -401,7 +422,7 @@ int main(int argc, char** argv) {
       int retval = setpgid(0, 0);
       if (retval) {
         LOG(ERROR) << "Failed to create new process group: " << strerror(errno);
-        std::exit(LauncherExitCodes::kProcessGroupError);
+        std::exit(RunnerExitCodes::kProcessGroupError);
       }
     }
   }
@@ -453,7 +474,7 @@ int main(int argc, char** argv) {
                              GetOnSubprocessExitCallback(*config));
   LaunchAdbConnectorIfEnabled(&process_monitor, *config, adbd_events_pipe);
 
-  ServerLoop(launcher_monitor_socket, vm_manager); // Should not return
+  ServerLoop(launcher_monitor_socket, &process_monitor); // Should not return
   LOG(ERROR) << "The server loop returned, it should never happen!!";
-  return cvd::LauncherExitCodes::kServerError;
+  return cvd::RunnerExitCodes::kServerError;
 }

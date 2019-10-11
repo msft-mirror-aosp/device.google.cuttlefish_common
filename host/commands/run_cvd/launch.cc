@@ -1,4 +1,4 @@
-#include "host/commands/launch/launch.h"
+#include "host/commands/run_cvd/launch.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -9,11 +9,11 @@
 #include "common/libs/utils/files.h"
 #include "common/libs/utils/size_utils.h"
 #include "common/vsoc/shm/screen_layout.h"
-#include "host/commands/launch/launcher_defs.h"
-#include "host/commands/launch/pre_launch_initializers.h"
-#include "host/commands/launch/vsoc_shared_memory.h"
+#include "host/commands/run_cvd/runner_defs.h"
+#include "host/commands/run_cvd/pre_launch_initializers.h"
+#include "host/commands/run_cvd/vsoc_shared_memory.h"
 
-using cvd::LauncherExitCodes;
+using cvd::RunnerExitCodes;
 using cvd::MonitorEntry;
 
 namespace {
@@ -28,12 +28,12 @@ std::string GetGuestPortArg() {
   return std::string{"--guest_ports="} + std::to_string(kEmulatorPort);
 }
 
-std::string GetHostPortArg() {
-  return std::string{"--host_ports="} + std::to_string(GetHostPort());
+std::string GetHostPortArg(const vsoc::CuttlefishConfig& config) {
+  return std::string{"--host_ports="} + std::to_string(config.host_port());
 }
 
-std::string GetAdbConnectorTcpArg() {
-  return std::string{"127.0.0.1:"} + std::to_string(GetHostPort());
+std::string GetAdbConnectorTcpArg(const vsoc::CuttlefishConfig& config) {
+  return std::string{"127.0.0.1:"} + std::to_string(config.host_port());
 }
 
 std::string GetAdbConnectorVsockArg(const vsoc::CuttlefishConfig& config) {
@@ -73,6 +73,10 @@ bool AdbVsockConnectorEnabled(const vsoc::CuttlefishConfig& config) {
       && AdbModeEnabled(config, vsoc::AdbMode::NativeVsock);
 }
 
+bool AdbUsbEnabled(const vsoc::CuttlefishConfig& config) {
+  return AdbModeEnabled(config, vsoc::AdbMode::Usb);
+}
+
 cvd::OnSocketReadyCb GetOnSubprocessExitCallback(
     const vsoc::CuttlefishConfig& config) {
   if (config.restart_subprocesses()) {
@@ -83,24 +87,8 @@ cvd::OnSocketReadyCb GetOnSubprocessExitCallback(
 }
 } // namespace
 
-int GetHostPort() {
-  constexpr int kFirstHostPort = 6520;
-  return vsoc::GetPerInstanceDefault(kFirstHostPort);
-}
-
 bool LogcatReceiverEnabled(const vsoc::CuttlefishConfig& config) {
   return config.logcat_mode() == cvd::kLogcatVsockMode;
-}
-
-bool AdbUsbEnabled(const vsoc::CuttlefishConfig& config) {
-  return AdbModeEnabled(config, vsoc::AdbMode::Usb);
-}
-
-void ValidateAdbModeFlag(const vsoc::CuttlefishConfig& config) {
-  if (!AdbUsbEnabled(config) && !AdbTunnelEnabled(config)
-      && !AdbVsockTunnelEnabled(config) && !AdbVsockHalfTunnelEnabled(config)) {
-    LOG(INFO) << "ADB not enabled";
-  }
 }
 
 cvd::Command GetIvServerCommand(const vsoc::CuttlefishConfig& config) {
@@ -157,7 +145,7 @@ std::vector<cvd::SharedFD> LaunchKernelLogMonitor(
       cvd::SharedFD event_pipe_write_end, event_pipe_read_end;
       if (!cvd::SharedFD::Pipe(&event_pipe_read_end, &event_pipe_write_end)) {
         LOG(ERROR) << "Unable to create boot events pipe: " << strerror(errno);
-        std::exit(LauncherExitCodes::kPipeIOError);
+        std::exit(RunnerExitCodes::kPipeIOError);
       }
       if (i > 0) {
         param_builder << ",";
@@ -184,7 +172,7 @@ void LaunchLogcatReceiverIfEnabled(const vsoc::CuttlefishConfig& config,
   if (!socket->IsOpen()) {
     LOG(ERROR) << "Unable to create logcat server socket: "
                << socket->StrError();
-    std::exit(LauncherExitCodes::kLogcatServerError);
+    std::exit(RunnerExitCodes::kLogcatServerError);
   }
   cvd::Command cmd(config.logcat_receiver_binary());
   cmd.AddParameter("-server_fd=", socket);
@@ -199,7 +187,7 @@ void LaunchConfigServer(const vsoc::CuttlefishConfig& config,
   if (!socket->IsOpen()) {
     LOG(ERROR) << "Unable to create configuration server socket: "
                << socket->StrError();
-    std::exit(LauncherExitCodes::kConfigServerError);
+    std::exit(RunnerExitCodes::kConfigServerError);
   }
   cvd::Command cmd(config.config_server_binary());
   cmd.AddParameter("-server_fd=", socket);
@@ -220,7 +208,7 @@ void LaunchTombstoneReceiverIfEnabled(const vsoc::CuttlefishConfig& config,
         0) {
       LOG(ERROR) << "Failed to create tombstone directory: " << tombstoneDir
                  << ". Error: " << errno;
-      exit(LauncherExitCodes::kTombstoneDirCreationError);
+      exit(RunnerExitCodes::kTombstoneDirCreationError);
     }
   }
 
@@ -229,7 +217,7 @@ void LaunchTombstoneReceiverIfEnabled(const vsoc::CuttlefishConfig& config,
   if (!socket->IsOpen()) {
     LOG(ERROR) << "Unable to create tombstone server socket: "
                << socket->StrError();
-    std::exit(LauncherExitCodes::kTombstoneServerError);
+    std::exit(RunnerExitCodes::kTombstoneServerError);
   }
   cvd::Command cmd(config.tombstone_receiver_binary());
   cmd.AddParameter("-server_fd=", socket);
@@ -250,7 +238,7 @@ void LaunchUsbServerIfEnabled(const vsoc::CuttlefishConfig& config,
   if (!usb_v1_server->IsOpen()) {
     LOG(ERROR) << "Unable to create USB v1 server socket: "
                << usb_v1_server->StrError();
-    std::exit(cvd::LauncherExitCodes::kUsbV1SocketError);
+    std::exit(cvd::RunnerExitCodes::kUsbV1SocketError);
   }
   cvd::Command usb_server(config.virtual_usb_manager_binary());
   usb_server.AddParameter("-usb_v1_fd=", usb_v1_server);
@@ -328,7 +316,7 @@ void LaunchAdbConnectorIfEnabled(cvd::ProcessMonitor* process_monitor,
   std::set<std::string> addresses;
 
   if (AdbTcpConnectorEnabled(config)) {
-    addresses.insert(GetAdbConnectorTcpArg());
+    addresses.insert(GetAdbConnectorTcpArg(config));
   }
   if (AdbVsockConnectorEnabled(config)) {
     addresses.insert(GetAdbConnectorVsockArg(config));
@@ -351,7 +339,7 @@ void LaunchSocketForwardProxyIfEnabled(cvd::ProcessMonitor* process_monitor,
   if (AdbTunnelEnabled(config)) {
     cvd::Command adb_tunnel(config.socket_forward_proxy_binary());
     adb_tunnel.AddParameter(GetGuestPortArg());
-    adb_tunnel.AddParameter(GetHostPortArg());
+    adb_tunnel.AddParameter(GetHostPortArg(config));
     process_monitor->StartSubprocess(std::move(adb_tunnel),
                                      GetOnSubprocessExitCallback(config));
   }
@@ -363,7 +351,7 @@ void LaunchSocketVsockProxyIfEnabled(cvd::ProcessMonitor* process_monitor,
     cvd::Command adb_tunnel(config.socket_vsock_proxy_binary());
     adb_tunnel.AddParameter("--vsock_port=6520");
     adb_tunnel.AddParameter(
-        std::string{"--tcp_port="} + std::to_string(GetHostPort()));
+        std::string{"--tcp_port="} + std::to_string(config.host_port()));
     adb_tunnel.AddParameter(std::string{"--vsock_guest_cid="} +
                             std::to_string(config.vsock_guest_cid()));
     process_monitor->StartSubprocess(std::move(adb_tunnel),
@@ -373,7 +361,7 @@ void LaunchSocketVsockProxyIfEnabled(cvd::ProcessMonitor* process_monitor,
     cvd::Command adb_tunnel(config.socket_vsock_proxy_binary());
     adb_tunnel.AddParameter("--vsock_port=5555");
     adb_tunnel.AddParameter(
-        std::string{"--tcp_port="} + std::to_string(GetHostPort()));
+        std::string{"--tcp_port="} + std::to_string(config.host_port()));
     adb_tunnel.AddParameter(std::string{"--vsock_guest_cid="} +
                             std::to_string(config.vsock_guest_cid()));
     process_monitor->StartSubprocess(std::move(adb_tunnel),

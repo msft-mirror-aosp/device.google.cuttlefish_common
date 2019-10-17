@@ -51,6 +51,21 @@ void LogAndSetEnv(const char* key, const std::string& value) {
   LOG(INFO) << key << "=" << value;
 }
 
+std::string JoinString(const std::vector<std::string>& args,
+                       const std::string& delim) {
+  bool first = true;
+  std::stringstream output;
+  for (const auto& arg : args) {
+    if (first) {
+      first = false;
+    } else {
+      output << delim;
+    }
+    output << arg;
+  }
+  return output.str();
+}
+
 bool Stop() {
   auto config = vsoc::CuttlefishConfig::Get();
   auto monitor_path = GetMonitorPath(config);
@@ -81,24 +96,10 @@ bool Stop() {
   return true;
 }
 
-std::string JoinString(const std::vector<std::string>& args,
-                       const std::string& delim) {
-  bool first = true;
-  std::stringstream output;
-  for (const auto& arg : args) {
-    if (first) {
-      first = false;
-    } else {
-      output << delim;
-    }
-    output << arg;
-  }
-  return output.str();
-}
-
 }  // namespace
 
 const std::string QemuManager::name() { return "qemu_cli"; }
+
 bool QemuManager::ConfigureGpu(vsoc::CuttlefishConfig *config) {
   if (config->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
     return false;

@@ -89,8 +89,13 @@ ManagedCFile OpenFile(const std::string& path, const std::string& mode) {
 }
 
 const std::string kMiscInfoPath = "META/misc_info.txt";
-const std::string kSystemPath = "IMAGES/system.img";
-const std::string kSystemExtPath = "IMAGES/system_ext.img";
+const std::set<std::string> kDefaultTargetImages = {
+  "IMAGES/boot.img",
+  "IMAGES/cache.img",
+  "IMAGES/recovery.img",
+  "IMAGES/userdata.img",
+  "IMAGES/vendor.img.",
+};
 
 bool CopyZipFileContents(const uint8_t* buf, size_t buf_size, void* cookie) {
   ZipWriter* out_writer = (ZipWriter*) cookie;
@@ -123,22 +128,15 @@ bool CombineTargetZipFiles(const std::string& default_target_zip,
   ZipWriter out_writer{out_file.get()};
 
   ZipEntry entry;
-  if (FindEntry(system_target.get(), ZipString(kSystemPath.c_str()), &entry) != 0) {
-    LOG(ERROR) << "System target files zip does not have " << kSystemPath;
-    return false;
-  }
 
-  if (FindEntry(default_target.get(), ZipString(kMiscInfoPath.c_str()), &entry) != 0) {
-    LOG(ERROR) << "Default target files zip does not have " << kMiscInfoPath;
+  if (FindEntry(system_target.get(), ZipString(kMiscInfoPath.c_str()), &entry) != 0) {
+    LOG(ERROR) << "System target files zip does not have " << kMiscInfoPath;
     return false;
   }
   out_writer.StartEntry(kMiscInfoPath.c_str(), 0);
   ProcessZipEntryContents(
-      default_target.get(), &entry, CopyZipFileContents, (void*) &out_writer);
+      system_target.get(), &entry, CopyZipFileContents, (void*) &out_writer);
   out_writer.FinishEntry();
-
-  bool system_target_has_ext =
-      FindEntry(system_target.get(), ZipString(kSystemExtPath.c_str()), &entry) == 0;
 
   void* iteration_cookie;
   ZipString zip_name;
@@ -157,9 +155,7 @@ bool CombineTargetZipFiles(const std::string& default_target_zip,
       continue;
     }
     LOG(INFO) << "Name is \"" << name << "\"";
-    if (name == kSystemPath) {
-      continue;
-    } else if (system_target_has_ext && name == kSystemExtPath) {
+    if (kDefaultTargetImages.count(name) == 0) {
       continue;
     }
     LOG(INFO) << "Writing " << name;
@@ -178,9 +174,7 @@ bool CombineTargetZipFiles(const std::string& default_target_zip,
       continue;
     }
     std::string name = std::string((const char*) zip_name.name, zip_name.name_length);
-    bool is_system_image = name == kSystemPath;
-    bool is_system_ext_image = name == kSystemExtPath;
-    if (!is_system_image && !is_system_ext_image) {
+    if (kDefaultTargetImages.count(name) > 0) {
       continue;
     }
     LOG(INFO) << "Writing " << name;
@@ -213,6 +207,7 @@ bool BuildSuperImage(const std::string& combined_target_zip,
       "otatools/releasetools/build_super_image.py"))) {
     build_super_image_binary =
         DefaultHostArtifactsPath("otatools/releasetools/build_super_image.py");
+    otatools_path = DefaultHostArtifactsPath("otatools");
   } else if (FileExists(DefaultHostArtifactsPath("bin/build_super_image"))) {
     build_super_image_binary =
         DefaultHostArtifactsPath("bin/build_super_image");

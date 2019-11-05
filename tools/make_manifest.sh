@@ -57,12 +57,19 @@ createManifest() {
 if [ ! -e manifest.txt ]; then
 	cat > manifest.txt << EOF
 ManifestVersion=1
-TftpServer=${tftp}
 EOF
 fi
 }
 
-makeSHA() {
+addKVToManifest() {
+	key=$1
+	value=$2
+	grep -q "^${key}=" manifest.txt && \
+		sed -i "s/^${key}=.*/${key}=${value}/" manifest.txt || \
+		echo "${key}=${value}" >> manifest.txt
+}
+
+addSHAToManifest() {
 	key="SHA"
 	cd "${ANDROID_BUILD_TOP}/device/google/cuttlefish_common"
 	SHA=`git rev-parse HEAD`
@@ -73,39 +80,38 @@ makeSHA() {
 	cd "${ANDROID_BUILD_TOP}/external/arm-trusted-firmware"
 	SHA="$SHA,`git rev-parse HEAD`"
 	cd -
-	grep -q "^${key}=" manifest.txt && \
-		sed -i "s/^${key}=.*/${key}=${SHA}/" manifest.txt || \
-		echo "${key}=${SHA}" >> manifest.txt
+
+	addKVToManifest "${key}" "${SHA}"
 }
 
-addToManifest() {
+addPathToManifest() {
 	key=$1
 	path=$2
 
 	if [ "${path}" != "" ]; then
 		filename=$(basename $path)
-
-		if [ $key == "UbootEnv" ] && [ ${file: -3} == ".gz" ]; then
+		filetype=`file -b --mime-type "${path}"`
+		if [ "$key" == "UbootEnv" ] && [ "${filetype}" == "application/gzip" ]; then
 			echo "error: gzip not supported for env images"
 		fi
-		if [ $key != "UbootEnv" ] && [ ${file: -3} != ".gz" ]; then
+		if [ "$key" != "UbootEnv" ] && [ "${filetype}" != "application/gzip" ]; then
 			echo "warning: gzip recommended for all non-env images"
 			confirm || exit 1
 		fi
-		if [ ! "${path}" -ef "${tftpdir}/${filename}" ]; then
-			cp "${path}" "${tftpdir}/"
+		if [ ! "${path}" -ef "${FLAGS_tftpdir}/${filename}" ]; then
+			cp "${path}" "${FLAGS_tftpdir}/"
 		fi
 	else
 		unset filename
 	fi
-	grep -q "^${key}=" manifest.txt && \
-		sed -i "s/^${key}=.*/${key}=${filename}/" manifest.txt || \
-		echo "${key}=${filename}" >> manifest.txt
+
+	addKVToManifest "${key}" "${filename}"
 }
 
 createManifest
-addToManifest RootfsImg ${rootfs}
-addToManifest UbootEnv ${env}
-addToManifest TplSplImg ${loader1}
-addToManifest UbootItb ${loader2}
-makeSHA
+addKVToManifest TftpServer ${FLAGS_tftp}
+addPathToManifest RootfsImg ${FLAGS_rootfs}
+addPathToManifest UbootEnv ${FLAGS_env}
+addPathToManifest TplSplImg ${FLAGS_loader1}
+addPathToManifest UbootItb ${FLAGS_loader2}
+addSHAToManifest

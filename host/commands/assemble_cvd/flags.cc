@@ -76,15 +76,13 @@ DEFINE_string(vendor_boot_image, "",
               "be vendor_boot.img in the directory specified by -system_image_dir.");
 DEFINE_int32(memory_mb, 2048,
              "Total amount of memory available for guest, MB.");
-std::string g_default_mempath{vsoc::GetDefaultMempath()};
-DEFINE_string(mempath, g_default_mempath.c_str(),
+DEFINE_string(mempath, vsoc::GetDefaultMempath(),
               "Target location for the shmem file.");
-DEFINE_string(mobile_interface, "", // default handled on ParseCommandLine
+DEFINE_string(mobile_interface, GetPerInstanceDefault("cvd-mbr-"),
               "Network interface to use for mobile networking");
-DEFINE_string(mobile_tap_name, "", // default handled on ParseCommandLine
+DEFINE_string(mobile_tap_name, GetPerInstanceDefault("cvd-mtap-"),
               "The name of the tap interface to use for mobile");
-std::string g_default_serial_number{GetPerInstanceDefault("CUTTLEFISHCVD")};
-DEFINE_string(serial_number, g_default_serial_number.c_str(),
+DEFINE_string(serial_number, GetPerInstanceDefault("CUTTLEFISHCVD"),
               "Serial number to use for the device");
 DEFINE_string(instance_dir, "", // default handled on ParseCommandLine
               "A directory to put all instance specific files");
@@ -155,7 +153,7 @@ DEFINE_string(adb_connector_binary,
               "Location of the adb_connector binary. Only relevant if "
               "-run_adb_connector is true");
 DEFINE_int32(vhci_port, GetPerInstanceDefault(0), "VHCI port to use for usb");
-DEFINE_string(wifi_tap_name, "", // default handled on ParseCommandLine
+DEFINE_string(wifi_tap_name, GetPerInstanceDefault("cvd-wtap-"),
               "The name of the tap interface to use for wifi");
 DEFINE_int32(vsock_guest_cid,
              vsoc::GetDefaultPerInstanceVsockCid(),
@@ -415,12 +413,23 @@ bool InitializeCuttlefishConfiguration(
   }
 
   tmp_config_obj.set_ramdisk_image_path(ramdisk_path);
+  tmp_config_obj.set_vendor_ramdisk_image_path(vendor_ramdisk_path);
+
   // Boot as recovery is set so normal boot needs to be forced every boot
   tmp_config_obj.add_kernel_cmdline("androidboot.force_normal_boot=1");
-  tmp_config_obj.set_vendor_ramdisk_image_path(vendor_ramdisk_path);
-  tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
-  if(FLAGS_initramfs_path.size() > 0) {
-    tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
+
+  if (FLAGS_kernel_path.size() && !FLAGS_initramfs_path.size()) {
+    // If there's a kernel that's passed in without an initramfs, that implies
+    // user error or a kernel built with no modules. In either case, let's
+    // choose to avoid loading the modules from the vendor ramdisk which are
+    // built for the default cf kernel. Once boot occurs, user error will
+    // become obvious.
+    tmp_config_obj.set_final_ramdisk_path(ramdisk_path);
+  } else {
+    tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
+    if(FLAGS_initramfs_path.size()) {
+      tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
+    }
   }
 
   tmp_config_obj.set_mempath(FLAGS_mempath);
@@ -554,18 +563,6 @@ bool InitializeCuttlefishConfiguration(
 }
 
 void SetDefaultFlagsForQemu() {
-  auto default_mobile_interface = GetPerInstanceDefault("cvd-mbr-");
-  SetCommandLineOptionWithMode("mobile_interface",
-                               default_mobile_interface.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_mobile_tap_name = GetPerInstanceDefault("cvd-mtap-");
-  SetCommandLineOptionWithMode("mobile_tap_name",
-                               default_mobile_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_wifi_tap_name = GetPerInstanceDefault("cvd-wtap-");
-  SetCommandLineOptionWithMode("wifi_tap_name",
-                               default_wifi_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   auto default_instance_dir =
       cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
   SetCommandLineOptionWithMode("instance_dir",
@@ -578,18 +575,6 @@ void SetDefaultFlagsForQemu() {
 }
 
 void SetDefaultFlagsForCrosvm() {
-  auto default_mobile_interface = GetPerInstanceDefault("cvd-mbr-");
-  SetCommandLineOptionWithMode("mobile_interface",
-                               default_mobile_interface.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_mobile_tap_name = GetPerInstanceDefault("cvd-mtap-");
-  SetCommandLineOptionWithMode("mobile_tap_name",
-                               default_mobile_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_wifi_tap_name = GetPerInstanceDefault("cvd-wtap-");
-  SetCommandLineOptionWithMode("wifi_tap_name",
-                               default_wifi_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   auto default_instance_dir =
       cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
   SetCommandLineOptionWithMode("instance_dir",
@@ -838,13 +823,21 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(
   // If a vendor ramdisk comes in via this mechanism, let it supercede the one
   // in the vendor boot image. This flag is what kernel presubmit testing uses
   // to pass in the kernel ramdisk.
-  const std::string& vendor_ramdisk_path = config->initramfs_path().size() ?
-                                           config->initramfs_path() :
-                                           config->vendor_ramdisk_image_path();
-  if(!ConcatRamdisks(config->final_ramdisk_path(), config->ramdisk_image_path(),
-                     vendor_ramdisk_path)) {
-    LOG(ERROR) << "Failed to concatenate ramdisk and vendor ramdisk";
-    exit(AssemblerExitCodes::kInitRamFsConcatError);
+
+  // If no kernel is passed in or an initramfs is made available, the default
+  // vendor boot ramdisk or the initramfs provided should be appended to the
+  // boot ramdisk. If a kernel IS provided with no initramfs, it is safe to
+  // safe to assume that the kernel was built with no modules and expects no
+  // modules for cf to run properly.
+  if(!FLAGS_kernel_path.size() || FLAGS_initramfs_path.size()) {
+    const std::string& vendor_ramdisk_path =
+      config->initramfs_path().size() ? config->initramfs_path()
+                                      : config->vendor_ramdisk_image_path();
+    if(!ConcatRamdisks(config->final_ramdisk_path(),
+                       config->ramdisk_image_path(), vendor_ramdisk_path)) {
+      LOG(ERROR) << "Failed to concatenate ramdisk and vendor ramdisk";
+      exit(AssemblerExitCodes::kInitRamFsConcatError);
+    }
   }
 
   if (config->decompress_kernel()) {

@@ -1,5 +1,5 @@
 //
-// Copyright (C) 2019 The Android Open Source Project
+// Copyright (C) 2018 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,61 +13,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_library_host_shared {
-    name: "cdisk_spec",
-    srcs: [
-        "cdisk_spec.proto",
-    ],
-    proto: {
-        type: "full",
-        export_proto_headers: true,
-        include_dirs: [
-            "external/protobuf/src",
-        ],
-    },
-    defaults: ["cuttlefish_host_only"],
-}
-
 cc_binary_host {
-    name: "assemble_cvd",
+    name: "cvd_status",
     srcs: [
-        "assemble_cvd.cc",
-        "boot_image_unpacker.cc",
-        "data_image.cc",
-        "flags.cc",
-        "image_aggregator.cc",
-        "super_image_mixer.cc",
+        "cvd_status.cc",
     ],
     header_libs: [
-        "bootimg_headers",
         "cuttlefish_glog",
     ],
     shared_libs: [
-        "cdisk_spec",
-        "vsoc_lib",
+        "libbase",
         "libcuttlefish_fs",
-        "libcuttlefish_strings",
         "libcuttlefish_utils",
         "cuttlefish_auto_resources",
-        "libbase",
-        "libnl",
-        "libprotobuf-cpp-full",
-        "libziparchive",
-        "libz",
     ],
     static_libs: [
         "libcuttlefish_host_config",
         "libcuttlefish_vm_manager",
-        "libivserver",
+        "libjsoncpp",
         "libgflags",
         "libxml2",
-        "libjsoncpp",
     ],
     defaults: ["cuttlefish_host_only", "cuttlefish_libicuuc"],
-}
-
-cc_prebuilt_binary {
-    name: "cf_bpttool",
-    srcs: ["cf_bpttool"],
-    defaults: ["cuttlefish_host_only"],
 }

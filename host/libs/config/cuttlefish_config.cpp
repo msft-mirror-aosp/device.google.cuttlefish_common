@@ -92,6 +92,7 @@ const char* kKernelCmdline = "kernel_cmdline";
 const char* kRamdiskImagePath = "ramdisk_image_path";
 const char* kInitramfsPath = "initramfs_path";
 const char* kFinalRamdiskPath = "final_ramdisk_path";
+const char* kVendorRamdiskImagePath = "vendor_ramdisk_image_path";
 
 const char* kVirtualDiskPaths = "virtual_disk_paths";
 const char* kUsbV1SocketName = "usb_v1_socket_name";
@@ -165,6 +166,8 @@ const char* kTombstoneReceiverBinary = "tombstone_receiver_binary";
 
 const char* kBootloader = "bootloader";
 const char* kUseBootloader = "use_bootloader";
+
+const char* kBootSlot = "boot_slot";
 }  // namespace
 
 namespace vsoc {
@@ -376,6 +379,14 @@ std::string CuttlefishConfig::final_ramdisk_path() const {
 void CuttlefishConfig::set_final_ramdisk_path(
     const std::string& final_ramdisk_path) {
   SetPath(kFinalRamdiskPath, final_ramdisk_path);
+}
+
+std::string CuttlefishConfig::vendor_ramdisk_image_path() const {
+  return (*dictionary_)[kVendorRamdiskImagePath].asString();
+}
+void CuttlefishConfig::set_vendor_ramdisk_image_path(
+    const std::string& vendor_ramdisk_image_path) {
+  SetPath(kVendorRamdiskImagePath, vendor_ramdisk_image_path);
 }
 
 std::vector<std::string> CuttlefishConfig::virtual_disk_paths() const {
@@ -901,6 +912,14 @@ std::string CuttlefishConfig::bootloader() const {
 
 void CuttlefishConfig::set_bootloader(const std::string& bootloader) {
   SetPath(kBootloader, bootloader);
+}
+
+void CuttlefishConfig::set_boot_slot(const std::string& boot_slot) {
+  (*dictionary_)[kBootSlot] = boot_slot;
+}
+
+std::string CuttlefishConfig::boot_slot() const {
+  return (*dictionary_)[kBootSlot].asString();
 }
 
 int CuttlefishConfig::tombstone_receiver_port() const {

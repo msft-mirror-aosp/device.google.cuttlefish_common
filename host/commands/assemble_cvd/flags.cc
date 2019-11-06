@@ -14,6 +14,8 @@
 #include "host/commands/assemble_cvd/data_image.h"
 #include "host/commands/assemble_cvd/image_aggregator.h"
 #include "host/commands/assemble_cvd/assembler_defs.h"
+#include "host/commands/assemble_cvd/super_image_mixer.h"
+#include "host/libs/config/fetcher_config.h"
 #include "host/libs/vm_manager/crosvm_manager.h"
 #include "host/libs/vm_manager/qemu_manager.h"
 #include "host/libs/vm_manager/vm_manager.h"
@@ -69,17 +71,18 @@ DEFINE_bool(guest_audit_security, true,
 DEFINE_string(boot_image, "",
               "Location of cuttlefish boot image. If empty it is assumed to be "
               "boot.img in the directory specified by -system_image_dir.");
+DEFINE_string(vendor_boot_image, "",
+              "Location of cuttlefish vendor boot image. If empty it is assumed to "
+              "be vendor_boot.img in the directory specified by -system_image_dir.");
 DEFINE_int32(memory_mb, 2048,
              "Total amount of memory available for guest, MB.");
-std::string g_default_mempath{vsoc::GetDefaultMempath()};
-DEFINE_string(mempath, g_default_mempath.c_str(),
+DEFINE_string(mempath, vsoc::GetDefaultMempath(),
               "Target location for the shmem file.");
-DEFINE_string(mobile_interface, "", // default handled on ParseCommandLine
+DEFINE_string(mobile_interface, GetPerInstanceDefault("cvd-mbr-"),
               "Network interface to use for mobile networking");
-DEFINE_string(mobile_tap_name, "", // default handled on ParseCommandLine
+DEFINE_string(mobile_tap_name, GetPerInstanceDefault("cvd-mtap-"),
               "The name of the tap interface to use for mobile");
-std::string g_default_serial_number{GetPerInstanceDefault("CUTTLEFISHCVD")};
-DEFINE_string(serial_number, g_default_serial_number.c_str(),
+DEFINE_string(serial_number, GetPerInstanceDefault("CUTTLEFISHCVD"),
               "Serial number to use for the device");
 DEFINE_string(instance_dir, "", // default handled on ParseCommandLine
               "A directory to put all instance specific files");
@@ -150,7 +153,7 @@ DEFINE_string(adb_connector_binary,
               "Location of the adb_connector binary. Only relevant if "
               "-run_adb_connector is true");
 DEFINE_int32(vhci_port, GetPerInstanceDefault(0), "VHCI port to use for usb");
-DEFINE_string(wifi_tap_name, "", // default handled on ParseCommandLine
+DEFINE_string(wifi_tap_name, GetPerInstanceDefault("cvd-wtap-"),
               "The name of the tap interface to use for wifi");
 DEFINE_int32(vsock_guest_cid,
              vsoc::GetDefaultPerInstanceVsockCid(),
@@ -204,6 +207,10 @@ DEFINE_int32(tombstone_receiver_port, vsoc::GetPerInstanceDefault(5630),
              "The vsock port for tombstones");
 DEFINE_bool(use_bootloader, false, "Boots the device using a bootloader");
 DEFINE_string(bootloader, "", "Bootloader binary path");
+DEFINE_string(boot_slot, "", "Force booting into the given slot. If empty, "
+             "the slot will be chosen based on the misc partition if using a "
+             "bootloader. It will default to 'a' if empty and not using a "
+             "bootloader.");
 
 namespace {
 
@@ -244,6 +251,11 @@ bool ResolveInstanceFiles() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   std::string default_composite_disk = FLAGS_system_image_dir + "/composite.img";
   SetCommandLineOptionWithMode("composite_disk", default_composite_disk.c_str(),
+                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  std::string default_vendor_boot_image = FLAGS_system_image_dir
+                                        + "/vendor_boot.img";
+  SetCommandLineOptionWithMode("vendor_boot_image",
+                               default_vendor_boot_image.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
 
   return true;
@@ -319,10 +331,12 @@ bool InitializeCuttlefishConfiguration(
   }
 
   auto ramdisk_path = tmp_config_obj.PerInstancePath("ramdisk.img");
+  auto vendor_ramdisk_path = tmp_config_obj.PerInstancePath("vendor_ramdisk.img");
   bool use_ramdisk = boot_image_unpacker.HasRamdiskImage();
   if (!use_ramdisk) {
     LOG(INFO) << "No ramdisk present; assuming system-as-root build";
     ramdisk_path = "";
+    vendor_ramdisk_path = "";
   }
 
   tmp_config_obj.add_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
@@ -399,11 +413,23 @@ bool InitializeCuttlefishConfiguration(
   }
 
   tmp_config_obj.set_ramdisk_image_path(ramdisk_path);
-  if(FLAGS_initramfs_path.size() > 0) {
-    tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
-    tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
-  } else {
+  tmp_config_obj.set_vendor_ramdisk_image_path(vendor_ramdisk_path);
+
+  // Boot as recovery is set so normal boot needs to be forced every boot
+  tmp_config_obj.add_kernel_cmdline("androidboot.force_normal_boot=1");
+
+  if (FLAGS_kernel_path.size() && !FLAGS_initramfs_path.size()) {
+    // If there's a kernel that's passed in without an initramfs, that implies
+    // user error or a kernel built with no modules. In either case, let's
+    // choose to avoid loading the modules from the vendor ramdisk which are
+    // built for the default cf kernel. Once boot occurs, user error will
+    // become obvious.
     tmp_config_obj.set_final_ramdisk_path(ramdisk_path);
+  } else {
+    tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
+    if(FLAGS_initramfs_path.size()) {
+      tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
+    }
   }
 
   tmp_config_obj.set_mempath(FLAGS_mempath);
@@ -503,6 +529,20 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_use_bootloader(FLAGS_use_bootloader);
   tmp_config_obj.set_bootloader(FLAGS_bootloader);
 
+  if (!FLAGS_boot_slot.empty()) {
+      tmp_config_obj.set_boot_slot(FLAGS_boot_slot);
+  }
+
+  if (!FLAGS_use_bootloader) {
+    std::string slot_suffix;
+    if (FLAGS_boot_slot.empty()) {
+      slot_suffix = "_a";
+    } else {
+      slot_suffix = "_" + FLAGS_boot_slot;
+    }
+    tmp_config_obj.add_kernel_cmdline("androidboot.slot_suffix=" + slot_suffix);
+  }
+
   tmp_config_obj.set_cuttlefish_env_path(GetCuttlefishEnvPath());
 
   auto config_file = GetConfigFilePath(tmp_config_obj);
@@ -523,18 +563,6 @@ bool InitializeCuttlefishConfiguration(
 }
 
 void SetDefaultFlagsForQemu() {
-  auto default_mobile_interface = GetPerInstanceDefault("cvd-mbr-");
-  SetCommandLineOptionWithMode("mobile_interface",
-                               default_mobile_interface.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_mobile_tap_name = GetPerInstanceDefault("cvd-mtap-");
-  SetCommandLineOptionWithMode("mobile_tap_name",
-                               default_mobile_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_wifi_tap_name = GetPerInstanceDefault("cvd-wtap-");
-  SetCommandLineOptionWithMode("wifi_tap_name",
-                               default_wifi_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   auto default_instance_dir =
       cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
   SetCommandLineOptionWithMode("instance_dir",
@@ -547,18 +575,6 @@ void SetDefaultFlagsForQemu() {
 }
 
 void SetDefaultFlagsForCrosvm() {
-  auto default_mobile_interface = GetPerInstanceDefault("cvd-mbr-");
-  SetCommandLineOptionWithMode("mobile_interface",
-                               default_mobile_interface.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_mobile_tap_name = GetPerInstanceDefault("cvd-mtap-");
-  SetCommandLineOptionWithMode("mobile_tap_name",
-                               default_mobile_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  auto default_wifi_tap_name = GetPerInstanceDefault("cvd-wtap-");
-  SetCommandLineOptionWithMode("wifi_tap_name",
-                               default_wifi_tap_name.c_str(),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   auto default_instance_dir =
       cvd::StringFromEnv("HOME", ".") + "/cuttlefish_runtime";
   SetCommandLineOptionWithMode("instance_dir",
@@ -733,7 +749,8 @@ void CreateCompositeDisk(const vsoc::CuttlefishConfig& config) {
 
 } // namespace
 
-const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** argv) {
+const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(
+    int* argc, char*** argv, cvd::FetcherConfig fetcher_config) {
   if (!ParseCommandLineFlags(argc, argv)) {
     LOG(ERROR) << "Failed to parse command arguments";
     exit(AssemblerExitCodes::kArgumentParsingError);
@@ -770,7 +787,14 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** a
     exit(cvd::kCuttlefishConfigurationInitError);
   }
 
-  auto boot_img_unpacker = cvd::BootImageUnpacker::FromImage(FLAGS_boot_image);
+  if (!cvd::FileHasContent(FLAGS_vendor_boot_image)) {
+    LOG(ERROR) << "File not found: " << FLAGS_vendor_boot_image;
+    exit(cvd::kCuttlefishConfigurationInitError);
+  }
+
+  auto boot_img_unpacker =
+    cvd::BootImageUnpacker::FromImages(FLAGS_boot_image,
+                                       FLAGS_vendor_boot_image);
 
   if (!InitializeCuttlefishConfiguration(*boot_img_unpacker)) {
     LOG(ERROR) << "Failed to initialize configuration";
@@ -784,6 +808,7 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** a
   }
 
   if (!boot_img_unpacker->Unpack(config->ramdisk_image_path(),
+                                 config->vendor_ramdisk_image_path(),
                                  config->use_unpacked_kernel()
                                      ? config->kernel_image_path()
                                      : "")) {
@@ -791,10 +816,26 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** a
     exit(AssemblerExitCodes::kBootImageUnpackError);
   }
 
-  if(config->initramfs_path().size() != 0) {
-    if(!ConcatRamdisks(config->final_ramdisk_path(), config->ramdisk_image_path(),
-        config->initramfs_path())) {
-      LOG(ERROR) << "Failed to concatenate ramdisk and initramfs";
+  // TODO(134522463) as part of the bootloader refactor, repack the vendor boot
+  // image and use the bootloader to load both the boot and vendor ramdisk.
+  // Until then, this hack to get gki modules into cuttlefish will suffice.
+
+  // If a vendor ramdisk comes in via this mechanism, let it supercede the one
+  // in the vendor boot image. This flag is what kernel presubmit testing uses
+  // to pass in the kernel ramdisk.
+
+  // If no kernel is passed in or an initramfs is made available, the default
+  // vendor boot ramdisk or the initramfs provided should be appended to the
+  // boot ramdisk. If a kernel IS provided with no initramfs, it is safe to
+  // safe to assume that the kernel was built with no modules and expects no
+  // modules for cf to run properly.
+  if(!FLAGS_kernel_path.size() || FLAGS_initramfs_path.size()) {
+    const std::string& vendor_ramdisk_path =
+      config->initramfs_path().size() ? config->initramfs_path()
+                                      : config->vendor_ramdisk_image_path();
+    if(!ConcatRamdisks(config->final_ramdisk_path(),
+                       config->ramdisk_image_path(), vendor_ramdisk_path)) {
+      LOG(ERROR) << "Failed to concatenate ramdisk and vendor ramdisk";
       exit(AssemblerExitCodes::kInitRamFsConcatError);
     }
   }
@@ -821,6 +862,13 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(int* argc, char*** a
 
   if (!cvd::FileExists(FLAGS_metadata_image)) {
     CreateBlankImage(FLAGS_metadata_image, FLAGS_blank_metadata_image_mb, "none");
+  }
+
+  if (SuperImageNeedsRebuilding(fetcher_config, *config)) {
+    if (!RebuildSuperImage(fetcher_config, *config, FLAGS_super_image)) {
+      LOG(ERROR) << "Super image rebuilding requested but could not be completed.";
+      exit(cvd::kCuttlefishConfigurationInitError);
+    }
   }
 
   if (ShouldCreateCompositeDisk()) {

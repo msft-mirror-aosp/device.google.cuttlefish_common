@@ -180,7 +180,6 @@ DEFINE_string(console_forwarder_binary,
               vsoc::DefaultHostArtifactsPath("bin/console_forwarder"),
               "The Console Forwarder binary to use");
 DEFINE_bool(restart_subprocesses, true, "Restart any crashed host process");
-DEFINE_bool(run_e2e_test, true, "Run e2e test after device launches");
 DEFINE_string(e2e_test_binary,
               vsoc::DefaultHostArtifactsPath("bin/host_region_e2e_test"),
               "Location of the region end to end test binary");
@@ -205,6 +204,10 @@ DEFINE_string(tombstone_receiver_binary,
               "Binary for the tombstone server");
 DEFINE_int32(tombstone_receiver_port, vsoc::GetPerInstanceDefault(5630),
              "The vsock port for tombstones");
+DEFINE_int32(keyboard_server_port, GetPerInstanceDefault(5540),
+             "The port on which the vsock keyboard server should listen");
+DEFINE_int32(touch_server_port, GetPerInstanceDefault(5640),
+             "The port on which the vsock touch server should listen");
 DEFINE_bool(use_bootloader, false, "Boots the device using a bootloader");
 DEFINE_string(bootloader, "", "Bootloader binary path");
 DEFINE_string(boot_slot, "", "Force booting into the given slot. If empty, "
@@ -214,7 +217,9 @@ DEFINE_string(boot_slot, "", "Force booting into the given slot. If empty, "
 
 namespace {
 
-std::string kRamdiskConcatExt = ".concat";
+const std::string kKernelDefaultPath = "kernel";
+const std::string kInitramfsImg = "initramfs.img";
+const std::string kRamdiskConcatExt = ".concat";
 
 template<typename S, typename T>
 static std::string concat(const S& s, const T& t) {
@@ -273,7 +278,8 @@ int GetHostPort() {
 // Initializes the config object and saves it to file. It doesn't return it, all
 // further uses of the config should happen through the singleton
 bool InitializeCuttlefishConfiguration(
-    const cvd::BootImageUnpacker& boot_image_unpacker) {
+    const cvd::BootImageUnpacker& boot_image_unpacker,
+    const cvd::FetcherConfig& fetcher_config) {
   vsoc::CuttlefishConfig tmp_config_obj;
   auto& memory_layout = *vsoc::VSoCMemoryLayout::Get();
   // Set this first so that calls to PerInstancePath below are correct
@@ -316,12 +322,14 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_adb_ip_and_port("127.0.0.1:" + std::to_string(GetHostPort()));
 
   tmp_config_obj.set_device_title(FLAGS_device_title);
-  if (FLAGS_kernel_path.size()) {
-    tmp_config_obj.set_kernel_image_path(FLAGS_kernel_path);
+  std::string discovered_kernel = fetcher_config.FindCvdFileWithSuffix(kKernelDefaultPath);
+  std::string foreign_kernel = FLAGS_kernel_path.size() ? FLAGS_kernel_path : discovered_kernel;
+  if (foreign_kernel.size()) {
+    tmp_config_obj.set_kernel_image_path(foreign_kernel);
     tmp_config_obj.set_use_unpacked_kernel(false);
   } else {
     tmp_config_obj.set_kernel_image_path(
-        tmp_config_obj.PerInstancePath("kernel"));
+        tmp_config_obj.PerInstancePath(kKernelDefaultPath.c_str()));
     tmp_config_obj.set_use_unpacked_kernel(true);
   }
   tmp_config_obj.set_decompress_kernel(FLAGS_decompress_kernel);
@@ -394,9 +402,6 @@ bool InitializeCuttlefishConfiguration(
       tmp_config_obj.add_kernel_cmdline("audit=0");
     }
   }
-  if (FLAGS_run_e2e_test) {
-    tmp_config_obj.add_kernel_cmdline("androidboot.vsoc_e2e_test=1");
-  }
   if (FLAGS_extra_kernel_cmdline.size()) {
     tmp_config_obj.add_kernel_cmdline(FLAGS_extra_kernel_cmdline);
   }
@@ -418,7 +423,9 @@ bool InitializeCuttlefishConfiguration(
   // Boot as recovery is set so normal boot needs to be forced every boot
   tmp_config_obj.add_kernel_cmdline("androidboot.force_normal_boot=1");
 
-  if (FLAGS_kernel_path.size() && !FLAGS_initramfs_path.size()) {
+  std::string discovered_ramdisk = fetcher_config.FindCvdFileWithSuffix(kInitramfsImg);
+  std::string foreign_ramdisk = FLAGS_initramfs_path.size () ? FLAGS_initramfs_path : discovered_ramdisk;
+  if (foreign_kernel.size() && !foreign_ramdisk.size()) {
     // If there's a kernel that's passed in without an initramfs, that implies
     // user error or a kernel built with no modules. In either case, let's
     // choose to avoid loading the modules from the vendor ramdisk which are
@@ -427,8 +434,8 @@ bool InitializeCuttlefishConfiguration(
     tmp_config_obj.set_final_ramdisk_path(ramdisk_path);
   } else {
     tmp_config_obj.set_final_ramdisk_path(ramdisk_path + kRamdiskConcatExt);
-    if(FLAGS_initramfs_path.size()) {
-      tmp_config_obj.set_initramfs_path(FLAGS_initramfs_path);
+    if(foreign_ramdisk.size()) {
+      tmp_config_obj.set_initramfs_path(foreign_ramdisk);
     }
   }
 
@@ -493,7 +500,7 @@ bool InitializeCuttlefishConfiguration(
       FLAGS_socket_forward_proxy_binary);
   tmp_config_obj.set_socket_vsock_proxy_binary(FLAGS_socket_vsock_proxy_binary);
   tmp_config_obj.set_run_as_daemon(FLAGS_daemon);
-  tmp_config_obj.set_run_e2e_test(FLAGS_run_e2e_test);
+  tmp_config_obj.set_run_e2e_test(false);
   tmp_config_obj.set_e2e_test_binary(FLAGS_e2e_test_binary);
 
   tmp_config_obj.set_data_policy(FLAGS_data_policy);
@@ -524,6 +531,15 @@ bool InitializeCuttlefishConfiguration(
     // runtime
   } else {
     tmp_config_obj.add_kernel_cmdline("androidboot.tombstone_transmit=0");
+  }
+
+  tmp_config_obj.set_touch_socket_port(FLAGS_touch_server_port);
+  tmp_config_obj.set_keyboard_socket_port(FLAGS_keyboard_server_port);
+  if (FLAGS_vm_manager == vm_manager::QemuManager::name()) {
+    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_touch_port=",
+                                             FLAGS_touch_server_port));
+    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_keyboard_port=",
+                                             FLAGS_keyboard_server_port));
   }
 
   tmp_config_obj.set_use_bootloader(FLAGS_use_bootloader);
@@ -568,9 +584,11 @@ void SetDefaultFlagsForQemu() {
   SetCommandLineOptionWithMode("instance_dir",
                                default_instance_dir.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode("hardware_name", "cutf_ivsh",
+  // TODO(b/144111429): Consolidate to one hardware name
+  SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatSerialMode,
+  // TODO(b/144119457) Use the serial port.
+  SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
 }
 
@@ -586,9 +604,8 @@ void SetDefaultFlagsForCrosvm() {
   SetCommandLineOptionWithMode("x_display",
                                getenv("DISPLAY"),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
+  // TODO(b/144111429): Consolidate to one hardware name
   SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  SetCommandLineOptionWithMode("run_e2e_test", "false",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
@@ -796,7 +813,7 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(
     cvd::BootImageUnpacker::FromImages(FLAGS_boot_image,
                                        FLAGS_vendor_boot_image);
 
-  if (!InitializeCuttlefishConfiguration(*boot_img_unpacker)) {
+  if (!InitializeCuttlefishConfiguration(*boot_img_unpacker, fetcher_config)) {
     LOG(ERROR) << "Failed to initialize configuration";
     exit(AssemblerExitCodes::kCuttlefishConfigurationInitError);
   }
@@ -829,7 +846,11 @@ const vsoc::CuttlefishConfig* InitFilesystemAndCreateConfig(
   // boot ramdisk. If a kernel IS provided with no initramfs, it is safe to
   // safe to assume that the kernel was built with no modules and expects no
   // modules for cf to run properly.
-  if(!FLAGS_kernel_path.size() || FLAGS_initramfs_path.size()) {
+  std::string discovered_kernel = fetcher_config.FindCvdFileWithSuffix(kKernelDefaultPath);
+  std::string foreign_kernel = FLAGS_kernel_path.size() ? FLAGS_kernel_path : discovered_kernel;
+  std::string discovered_ramdisk = fetcher_config.FindCvdFileWithSuffix(kInitramfsImg);
+  std::string foreign_ramdisk = FLAGS_initramfs_path.size () ? FLAGS_initramfs_path : discovered_ramdisk;
+  if(!foreign_kernel.size() || foreign_ramdisk.size()) {
     const std::string& vendor_ramdisk_path =
       config->initramfs_path().size() ? config->initramfs_path()
                                       : config->vendor_ramdisk_image_path();

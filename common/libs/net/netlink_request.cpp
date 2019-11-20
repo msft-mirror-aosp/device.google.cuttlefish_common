@@ -20,6 +20,7 @@
 #include <net/if.h>
 #include <string.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -35,21 +36,16 @@ uint32_t NetlinkRequest::SeqNo() const {
 }
 
 void* NetlinkRequest::AppendRaw(const void* data, size_t length) {
-  void* out = request_.end();
-
-  request_.Append(data, length);
-  int pad = RTA_ALIGN(length) - length;
-  if (pad > 0) {
-    request_.Resize(request_.size() + pad);
-  }
-
-  return out;
+  auto* output = static_cast<char*>(ReserveRaw(length));
+  const auto* input = static_cast<const char*>(data);
+  std::copy(input, input + length, output);
+  return output;
 }
 
 void* NetlinkRequest::ReserveRaw(size_t length) {
-  void* out = request_.end();
-  request_.Resize(request_.size() + RTA_ALIGN(length));
-  return out;
+  size_t original_size = request_.size();
+  request_.resize(original_size + RTA_ALIGN(length), '\0');
+  return reinterpret_cast<void*>(request_.data() + original_size);
 }
 
 nlattr* NetlinkRequest::AppendTag(
@@ -61,9 +57,9 @@ nlattr* NetlinkRequest::AppendTag(
   return attr;
 }
 
-NetlinkRequest::NetlinkRequest(int32_t command, int32_t flags)
-    : request_(512),
-      header_(Reserve<nlmsghdr>()) {
+NetlinkRequest::NetlinkRequest(int32_t command, int32_t flags) {
+  request_.reserve(512);
+  header_ = Reserve<nlmsghdr>();
   flags |= NLM_F_ACK | NLM_F_REQUEST;
   header_->nlmsg_flags = flags;
   header_->nlmsg_type = command;
@@ -75,7 +71,7 @@ NetlinkRequest::NetlinkRequest(NetlinkRequest&& other) {
   using std::swap;
   swap(lists_, other.lists_);
   swap(header_, other.header_);
-  request_.Swap(other.request_);
+  swap(request_, other.request_);
 }
 
 void NetlinkRequest::AddString(uint16_t type, const std::string& value) {

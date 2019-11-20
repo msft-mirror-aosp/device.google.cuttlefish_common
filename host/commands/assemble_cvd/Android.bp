@@ -46,7 +46,6 @@ cc_binary_host {
         "cdisk_spec",
         "vsoc_lib",
         "libcuttlefish_fs",
-        "libcuttlefish_strings",
         "libcuttlefish_utils",
         "cuttlefish_auto_resources",
         "libbase",
@@ -66,8 +65,7 @@ cc_binary_host {
     defaults: ["cuttlefish_host_only", "cuttlefish_libicuuc"],
 }
 
-cc_prebuilt_binary {
+sh_binary_host {
     name: "cf_bpttool",
-    srcs: ["cf_bpttool"],
-    defaults: ["cuttlefish_host_only"],
+    src: "cf_bpttool",
 }

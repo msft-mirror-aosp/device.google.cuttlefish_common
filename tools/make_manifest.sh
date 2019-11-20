@@ -30,6 +30,10 @@ DEFINE_string tftp \
   "192.168.0.1" "TFTP server address" "f"
 DEFINE_string tftpdir \
   "/tftpboot" "TFTP server directory" "d"
+DEFINE_string version \
+  "2" "Specify which manifest version to use (default: latest)" "v"
+DEFINE_string ethaddr \
+  "" "MAC address of device to DFU (default: all)" "m"
 
 FLAGS_HELP="USAGE: $0 [flags]"
 
@@ -54,11 +58,7 @@ confirm() {
 }
 
 createManifest() {
-if [ ! -e manifest.txt ]; then
-	cat > manifest.txt << EOF
-ManifestVersion=1
-EOF
-fi
+	>>manifest.txt
 }
 
 addKVToManifest() {
@@ -69,19 +69,19 @@ addKVToManifest() {
 		echo "${key}=${value}" >> manifest.txt
 }
 
-addSHAToManifest() {
-	key="SHA"
+addShaToManifest() {
+	key="Sha"
 	cd "${ANDROID_BUILD_TOP}/device/google/cuttlefish_common"
-	SHA=`git rev-parse HEAD`
+	Sha=`git rev-parse HEAD`
 	cd -
 	cd "${ANDROID_BUILD_TOP}/external/u-boot"
-	SHA="$SHA,`git rev-parse HEAD`"
+	Sha="$Sha,`git rev-parse HEAD`"
 	cd -
 	cd "${ANDROID_BUILD_TOP}/external/arm-trusted-firmware"
-	SHA="$SHA,`git rev-parse HEAD`"
+	Sha="$Sha,`git rev-parse HEAD`"
 	cd -
 
-	addKVToManifest "${key}" "${SHA}"
+	addKVToManifest "${key}" "${Sha}"
 }
 
 addPathToManifest() {
@@ -109,9 +109,11 @@ addPathToManifest() {
 }
 
 createManifest
+addKVToManifest ManifestVersion ${FLAGS_version}
 addKVToManifest TftpServer ${FLAGS_tftp}
+addKVToManifest DFUethaddr ${FLAGS_ethaddr}
 addPathToManifest RootfsImg ${FLAGS_rootfs}
 addPathToManifest UbootEnv ${FLAGS_env}
 addPathToManifest TplSplImg ${FLAGS_loader1}
 addPathToManifest UbootItb ${FLAGS_loader2}
-addSHAToManifest
+addShaToManifest

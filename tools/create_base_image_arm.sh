@@ -203,55 +203,85 @@ if dhcp ${scriptaddr} manifest.txt; then
 	setenv OldSha ${Sha}
 	setenv Sha
 	env import -t ${scriptaddr} 0x8000 ManifestVersion
+	echo "Manifest version $ManifestVersion";
 	if test "$ManifestVersion" = "1"; then
 		run manifest1
+	elif test "$ManifestVersion" = "2"; then
+		run manifest2
 	else
 		run manifestX
 	fi
 fi'
 setenv manifestX 'echo "***** ERROR: Unknown manifest version! *****";'
 setenv manifest1 '
-echo "Manifest version 1";
 env import -t ${scriptaddr} 0x8000
 if test "$Sha" != "$OldSha"; then
 	setenv serverip ${TftpServer}
 	setenv loadaddr 0x00200000
 	mmc dev 0 0;
-	file=$TplSplImg; offset=0x40; size=0x1f80; run tftpget1; setenv TplSplImg
-	file=$UbootItb;  offset=0x4000; size=0x2000; run tftpget1; setenv UbootItb
-	file=$TrustImg; offset=0x6000; size=0x2000; run tftpget1; setenv TrustImg
-	file=$RootfsImg; offset=0x8000; size=0; run tftpget1; setenv RootfsImg
-	file=$UbootEnv; offset=0x1fc0; size=0x40; run tftpget1; setenv UbootEnv
+	setenv file $TplSplImg; offset=0x40; size=0x1f80; run tftpget1; setenv TplSplImg
+	setenv file $UbootItb;  offset=0x4000; size=0x2000; run tftpget1; setenv UbootItb
+	setenv file $TrustImg; offset=0x6000; size=0x2000; run tftpget1; setenv TrustImg
+	setenv file $RootfsImg; offset=0x8000; size=0; run tftpget1; setenv RootfsImg
+	setenv file $UbootEnv; offset=0x1fc0; size=0x40; run tftpget1; setenv UbootEnv
 	mw.b ${scriptaddr} 0 0x8000
 	env export -b ${scriptaddr} 0x8000
 	mmc write ${scriptaddr} 0x1fc0 0x40
 else
 	echo "Already have ${Sha}. Booting..."
 fi'
-setenv tftpget1 "
-mw.b ${loadaddr} 0 0x400000
-&& tftp ${file}
-&& isGz=0 && setexpr isGz sub .*\\.gz\$ 1 ${file}
-&& if test $isGz = 1; then
-	setexpr boffset ${offset} * 0x200
-	&& gzwrite mmc 0 ${loadaddr} 0x${filesize} 100000 ${boffset}
-	&& echo Updated: ${bootfile}
-elif test ${file} = boot.env; then
-	env import -b ${loadaddr}
-	&& echo Updated: boot.env
-else
-	&& if test $size = 0; then
-		setexpr x $filesize - 1
-		&& setexpr x $x / 0x1000
-		&& setexpr x $x + 1
-		&& setexpr x $x * 0x1000
-		&& setexpr x $x / 0x200
-		&& size=0x${x}
+setenv manifest2 '
+env import -t ${scriptaddr} 0x8000
+if test "$DFUethaddr" = "$ethaddr" || test "$DFUethaddr" = ""; then
+	if test "$Sha" != "$OldSha"; then
+		setenv serverip ${TftpServer}
+		setenv loadaddr 0x00200000
+		mmc dev 0 0;
+		setenv file $TplSplImg; offset=0x40; size=0x1f80; run tftpget1; setenv TplSplImg
+		setenv file $UbootItb;  offset=0x4000; size=0x2000; run tftpget1; setenv UbootItb
+		setenv file $TrustImg; offset=0x6000; size=0x2000; run tftpget1; setenv TrustImg
+		setenv file $RootfsImg; offset=0x8000; size=0; run tftpget1; setenv RootfsImg
+		setenv file $UbootEnv; offset=0x1fc0; size=0x40; run tftpget1; setenv UbootEnv
+		mw.b ${scriptaddr} 0 0x8000
+		env export -b ${scriptaddr} 0x8000
+		mmc write ${scriptaddr} 0x1fc0 0x40
+	else
+		echo "Already have ${Sha}. Booting..."
 	fi
-	&& mmc write ${loadaddr} ${offset} ${size}
-	&& echo Updated: ${bootfile}
-fi
-|| echo ** UPDATE FAILED: ${bootfile} **"
+else
+	echo "Update ${Sha} is not for me. Booting..."
+fi'
+setenv tftpget1 '
+if test "$file" != ""; then
+	mw.b ${loadaddr} 0 0x400000
+	tftp ${file}
+	if test $? = 0; then
+		setenv isGz 0 && setexpr isGz sub .*\\.gz\$ 1 ${file}
+		if test $isGz = 1; then
+			if test ${file} = ${UbootEnv}; then
+				echo "** gzipped env unsupported **"
+			else
+				setexpr boffset ${offset} * 0x200
+				gzwrite mmc 0 ${loadaddr} 0x${filesize} 100000 ${boffset} && echo Updated: ${file}
+			fi
+		elif test ${file} = ${UbootEnv}; then
+			env import -b ${loadaddr} && echo Updated: ${file}
+		else
+			if test $size = 0; then
+				setexpr x $filesize - 1
+				setexpr x $x / 0x1000
+				setexpr x $x + 1
+				setexpr x $x * 0x1000
+				setexpr x $x / 0x200
+				size=0x${x}
+			fi
+			mmc write ${loadaddr} ${offset} ${size} && echo Updated: ${file}
+		fi
+	fi
+	if test $? != 0; then
+		echo ** UPDATE FAILED: ${file} **
+	fi
+fi'
 if mmc dev 1 0; then; else
 	run bootcmd_dhcp;
 fi
@@ -458,7 +488,7 @@ EOF
 #!/bin/bash
 echo "Installing cuttlefish-common package..."
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
-MAC=`ip link | grep eth0 -A1 | grep ether | sed 's/.*\(..:..:..:..:..:..\) .*/\1/'`
+MAC=`ip link | grep eth0 -A1 | grep ether | sed 's/.*\(..:..:..:..:..:..\) .*/\1/' | tr -d :`
 sed -i " 1 s/.*/& rockpi-${MAC}/" /etc/hosts
 sudo hostnamectl set-hostname "rockpi-${MAC}"
 

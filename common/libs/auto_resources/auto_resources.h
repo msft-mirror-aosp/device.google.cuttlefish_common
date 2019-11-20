@@ -32,92 +32,6 @@ char (&ArraySizeHelper(const T (&array)[N]))[N];
 
 #define arraysize(array) (sizeof(ArraySizeHelper(array)))
 
-// Automatically close a file descriptor
-class AutoCloseFILE {
- public:
-  explicit AutoCloseFILE(FILE *f) : f_(f) { }
-  virtual ~AutoCloseFILE() {
-    if (f_) {
-      (void)::fclose(f_);
-      f_ = NULL;
-    }
-  }
-
-  operator FILE*() const {
-    return f_;
-  }
-
-  bool CopyFrom(const AutoCloseFILE& in);
-
-  bool IsError() const {
-    return f_ == NULL;
-  }
-
-  bool IsEOF() const {
-    return IsError() || feof(f_);
-  }
-
-  bool IsOpen() const {
-    return f_ != NULL;
-  }
-
-  // Close the underlying file descriptor, returning a status to give the caller
-  // the chance to act on failure to close.
-  // Returns true on success.
-  bool close() {
-    bool rval = true;
-    if (f_) {
-      rval = !::fclose(f_);
-      f_ = NULL;
-    }
-    return rval;
-  }
-
- private:
-  AutoCloseFILE& operator=(const AutoCloseFILE & o);
-  explicit AutoCloseFILE(const AutoCloseFILE &);
-
-  FILE* f_;
-};
-
-// Automatically close a file descriptor
-class AutoCloseFileDescriptor {
- public:
-  explicit AutoCloseFileDescriptor(int fd) : fd_(fd) { }
-  virtual ~AutoCloseFileDescriptor() {
-    if (fd_ != -1) {
-      (void)::close(fd_);
-      fd_ = -1;
-    }
-  }
-
-  operator int() const {
-    return fd_;
-  }
-
-  bool IsError() const {
-    return fd_ == -1;
-  }
-
-  // Close the underlying file descriptor, returning a status to give the caller
-  // the chance to act on failure to close.
-  // Returns true on success.
-  bool close() {
-    bool rval = true;
-    if (fd_ != -1) {
-      rval = !::close(fd_);
-      fd_ = -1;
-    }
-    return rval;
-  }
-
- private:
-  AutoCloseFileDescriptor& operator=(const AutoCloseFileDescriptor & o);
-  explicit AutoCloseFileDescriptor(const AutoCloseFileDescriptor &);
-
-  int fd_;
-};
-
 // In C++11 this is just std::vector<char>, but Android isn't
 // there yet.
 class AutoFreeBuffer {
@@ -206,18 +120,5 @@ class AutoFreeBuffer {
  private:
   AutoFreeBuffer& operator=(const AutoFreeBuffer&);
   explicit AutoFreeBuffer(const AutoFreeBuffer&);
-};
-
-class AutoUMask {
- public:
-  explicit AutoUMask(mode_t mask) {
-      prev_umask = umask(mask);
-  }
-
-  ~AutoUMask() {
-    umask(prev_umask);
-  }
- private:
-  mode_t prev_umask;
 };
 #endif  // CUTTLEFISH_COMMON_COMMON_LIBS_AUTO_RESOURCES_AUTO_RESOURCES_H_

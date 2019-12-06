@@ -55,16 +55,8 @@ DEFINE_string(kernel_decompresser_executable,
 DEFINE_string(extra_kernel_cmdline, "",
               "Additional flags to put on the kernel command line");
 DEFINE_int32(loop_max_part, 7, "Maximum number of loop partitions");
-DEFINE_string(androidboot_console, "ttyS1",
-              "Console device for the Android framework");
-DEFINE_string(
-    hardware_name, "",
-    "The codename of the device's hardware, one of {cutf_ivsh, cutf_cvm}");
-DEFINE_string(guest_security, "selinux",
-              "The security module to use in the guest");
 DEFINE_bool(guest_enforce_security, true,
-            "Whether to run in enforcing mode (non permissive). Ignored if "
-            "-guest_security is empty.");
+            "Whether to run in enforcing mode (non permissive).");
 DEFINE_bool(guest_audit_security, true,
             "Whether to log security audits.");
 DEFINE_string(boot_image, "",
@@ -205,13 +197,6 @@ const std::string kKernelDefaultPath = "kernel";
 const std::string kInitramfsImg = "initramfs.img";
 const std::string kRamdiskConcatExt = ".concat";
 
-template<typename S, typename T>
-static std::string concat(const S& s, const T& t) {
-  std::ostringstream os;
-  os << s << t;
-  return os.str();
-}
-
 bool ResolveInstanceFiles() {
   if (FLAGS_system_image_dir.empty()) {
     LOG(ERROR) << "--system_image_dir must be specified.";
@@ -277,15 +262,14 @@ bool InitializeCuttlefishConfiguration(
   }
   tmp_config_obj.set_vm_manager(FLAGS_vm_manager);
   tmp_config_obj.set_gpu_mode(FLAGS_gpu_mode);
-  if (!vm_manager::VmManager::ConfigureGpuMode(&tmp_config_obj)) {
+  if (vm_manager::VmManager::ConfigureGpuMode(tmp_config_obj.vm_manager(),
+                                              tmp_config_obj.gpu_mode()).empty()) {
     LOG(ERROR) << "Invalid gpu_mode=" << FLAGS_gpu_mode <<
                " does not work with vm_manager=" << FLAGS_vm_manager;
     return false;
   }
   tmp_config_obj.set_wayland_socket(FLAGS_wayland_socket);
   tmp_config_obj.set_x_display(FLAGS_x_display);
-
-  vm_manager::VmManager::ConfigureBootDevices(&tmp_config_obj);
 
   tmp_config_obj.set_serial_number(FLAGS_serial_number);
 
@@ -328,55 +312,16 @@ bool InitializeCuttlefishConfiguration(
     return false;
   }
 
-  tmp_config_obj.add_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
-  tmp_config_obj.add_kernel_cmdline("init=/init");
-  tmp_config_obj.add_kernel_cmdline(
-      concat("androidboot.serialno=", FLAGS_serial_number));
-  tmp_config_obj.add_kernel_cmdline("mac80211_hwsim.radios=0");
-  tmp_config_obj.add_kernel_cmdline(concat("androidboot.lcd_density=", FLAGS_dpi));
-  tmp_config_obj.add_kernel_cmdline(
-      concat("androidboot.setupwizard_mode=", FLAGS_setupwizard_mode));
-  tmp_config_obj.add_kernel_cmdline(concat("loop.max_part=", FLAGS_loop_max_part));
-  if (!FLAGS_androidboot_console.empty()) {
-    tmp_config_obj.add_kernel_cmdline(
-        concat("androidboot.console=", FLAGS_androidboot_console));
-  }
-  if (!FLAGS_hardware_name.empty()) {
-    tmp_config_obj.add_kernel_cmdline(
-        concat("androidboot.hardware=", FLAGS_hardware_name));
-  }
-  if (FLAGS_logcat_mode == cvd::kLogcatVsockMode) {
-    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_logcat_port=",
-                                             FLAGS_logcat_vsock_port));
-  }
-  tmp_config_obj.add_kernel_cmdline(concat("androidboot.cuttlefish_config_server_port=",
-                                           FLAGS_config_server_port));
-  tmp_config_obj.set_hardware_name(FLAGS_hardware_name);
-  if (!FLAGS_guest_security.empty()) {
-    tmp_config_obj.add_kernel_cmdline(concat("security=", FLAGS_guest_security));
-    if (FLAGS_guest_enforce_security) {
-      tmp_config_obj.add_kernel_cmdline("enforcing=1");
-    } else {
-      tmp_config_obj.add_kernel_cmdline("enforcing=0");
-      tmp_config_obj.add_kernel_cmdline("androidboot.selinux=permissive");
-    }
-    if (FLAGS_guest_audit_security) {
-      tmp_config_obj.add_kernel_cmdline("audit=1");
-    } else {
-      tmp_config_obj.add_kernel_cmdline("audit=0");
-    }
-  }
-  if (FLAGS_extra_kernel_cmdline.size()) {
-    tmp_config_obj.add_kernel_cmdline(FLAGS_extra_kernel_cmdline);
-  }
+  tmp_config_obj.set_boot_image_kernel_cmdline(boot_image_unpacker.kernel_cmdline());
+  tmp_config_obj.set_loop_max_part(FLAGS_loop_max_part);
+  tmp_config_obj.set_guest_enforce_security(FLAGS_guest_enforce_security);
+  tmp_config_obj.set_guest_audit_security(FLAGS_guest_audit_security);
+  tmp_config_obj.set_extra_kernel_cmdline(FLAGS_extra_kernel_cmdline);
 
   tmp_config_obj.set_virtual_disk_paths({FLAGS_composite_disk});
 
   tmp_config_obj.set_ramdisk_image_path(ramdisk_path);
   tmp_config_obj.set_vendor_ramdisk_image_path(vendor_ramdisk_path);
-
-  // Boot as recovery is set so normal boot needs to be forced every boot
-  tmp_config_obj.add_kernel_cmdline("androidboot.force_normal_boot=1");
 
   std::string discovered_ramdisk = fetcher_config.FindCvdFileWithSuffix(kInitramfsImg);
   std::string foreign_ramdisk = FLAGS_initramfs_path.size () ? FLAGS_initramfs_path : discovered_ramdisk;
@@ -456,48 +401,19 @@ bool InitializeCuttlefishConfiguration(
   tmp_config_obj.set_logcat_vsock_port(FLAGS_logcat_vsock_port);
   tmp_config_obj.set_config_server_port(FLAGS_config_server_port);
   tmp_config_obj.set_frames_vsock_port(FLAGS_frames_vsock_port);
-  if (tmp_config_obj.enable_vnc_server()) {
-    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_frames_port=",
-                                             FLAGS_frames_vsock_port));
-  }
 
   tmp_config_obj.set_enable_tombstone_receiver(FLAGS_enable_tombstone_receiver);
   tmp_config_obj.set_tombstone_receiver_port(FLAGS_tombstone_receiver_port);
   tmp_config_obj.set_tombstone_receiver_binary(FLAGS_tombstone_receiver_binary);
-  if (FLAGS_enable_tombstone_receiver) {
-    tmp_config_obj.add_kernel_cmdline("androidboot.tombstone_transmit=1");
-    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_tombstone_port="
-      ,FLAGS_tombstone_receiver_port));
-    // TODO (b/128842613) populate a cid flag to read the host CID during
-    // runtime
-  } else {
-    tmp_config_obj.add_kernel_cmdline("androidboot.tombstone_transmit=0");
-  }
 
   tmp_config_obj.set_touch_socket_port(FLAGS_touch_server_port);
   tmp_config_obj.set_keyboard_socket_port(FLAGS_keyboard_server_port);
-  if (FLAGS_vm_manager == vm_manager::QemuManager::name()) {
-    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_touch_port=",
-                                             FLAGS_touch_server_port));
-    tmp_config_obj.add_kernel_cmdline(concat("androidboot.vsock_keyboard_port=",
-                                             FLAGS_keyboard_server_port));
-  }
 
   tmp_config_obj.set_use_bootloader(FLAGS_use_bootloader);
   tmp_config_obj.set_bootloader(FLAGS_bootloader);
 
   if (!FLAGS_boot_slot.empty()) {
       tmp_config_obj.set_boot_slot(FLAGS_boot_slot);
-  }
-
-  if (!FLAGS_use_bootloader) {
-    std::string slot_suffix;
-    if (FLAGS_boot_slot.empty()) {
-      slot_suffix = "_a";
-    } else {
-      slot_suffix = "_" + FLAGS_boot_slot;
-    }
-    tmp_config_obj.add_kernel_cmdline("androidboot.slot_suffix=" + slot_suffix);
   }
 
   tmp_config_obj.set_cuttlefish_env_path(GetCuttlefishEnvPath());
@@ -525,9 +441,6 @@ void SetDefaultFlagsForQemu() {
   SetCommandLineOptionWithMode("instance_dir",
                                default_instance_dir.c_str(),
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  // TODO(b/144111429): Consolidate to one hardware name
-  SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
   // TODO(b/144119457) Use the serial port.
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
@@ -544,9 +457,6 @@ void SetDefaultFlagsForCrosvm() {
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("x_display",
                                getenv("DISPLAY"),
-                               google::FlagSettingMode::SET_FLAGS_DEFAULT);
-  // TODO(b/144111429): Consolidate to one hardware name
-  SetCommandLineOptionWithMode("hardware_name", "cutf_cvm",
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);
   SetCommandLineOptionWithMode("logcat_mode", cvd::kLogcatVsockMode,
                                google::FlagSettingMode::SET_FLAGS_DEFAULT);

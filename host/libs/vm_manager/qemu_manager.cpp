@@ -30,6 +30,7 @@
 #include <thread>
 #include <vector>
 
+#include <android-base/strings.h>
 #include <glog/logging.h>
 
 #include "common/libs/fs/shared_select.h"
@@ -100,33 +101,32 @@ bool Stop() {
 
 const std::string QemuManager::name() { return "qemu_cli"; }
 
-bool QemuManager::ConfigureGpu(vsoc::CuttlefishConfig *config) {
-  if (config->gpu_mode() != vsoc::kGpuModeGuestSwiftshader) {
-    return false;
+std::vector<std::string> QemuManager::ConfigureGpu(const std::string& gpu_mode) {
+  if (gpu_mode != vsoc::kGpuModeGuestSwiftshader) {
+    return {};
   }
   // Override the default HAL search paths in all cases. We do this because
   // the HAL search path allows for fallbacks, and fallbacks in conjunction
   // with properities lead to non-deterministic behavior while loading the
   // HALs.
-  config->add_kernel_cmdline("androidboot.hardware.gralloc=cutf_ashmem");
-  config->add_kernel_cmdline(
-      "androidboot.hardware.hwcomposer=cutf_cvm_ashmem");
-  config->add_kernel_cmdline("androidboot.hardware.egl=swiftshader");
-  config->add_kernel_cmdline("androidboot.hardware.vulkan=pastel");
-  return true;
+  return {
+      "androidboot.hardware.gralloc=cutf_ashmem",
+      "androidboot.hardware.hwcomposer=cutf_cvm_ashmem",
+      "androidboot.hardware.egl=swiftshader",
+      "androidboot.hardware.vulkan=pastel",
+  };
 }
 
-void QemuManager::ConfigureBootDevices(vsoc::CuttlefishConfig* config) {
+std::vector<std::string> QemuManager::ConfigureBootDevices() {
   // PCI domain 0, bus 0, device 3, function 0
   // This is controlled with 'addr=0x3' in cf_qemu.sh
-  config->add_kernel_cmdline(
-    "androidboot.boot_devices=pci0000:00/0000:00:03.0");
+  return { "androidboot.boot_devices=pci0000:00/0000:00:03.0" };
 }
 
 QemuManager::QemuManager(const vsoc::CuttlefishConfig* config)
   : VmManager(config) {}
 
-std::vector<cvd::Command> QemuManager::StartCommands(bool /*with_frontend*/) {
+std::vector<cvd::Command> QemuManager::StartCommands() {
   // Set the config values in the environment
   LogAndSetEnv("qemu_binary", config_->qemu_binary());
   LogAndSetEnv("instance_name", config_->instance_name());
@@ -137,7 +137,7 @@ std::vector<cvd::Command> QemuManager::StartCommands(bool /*with_frontend*/) {
   LogAndSetEnv("kernel_image_path", config_->GetKernelImageToUse());
   LogAndSetEnv("gdb_flag", config_->gdb_flag());
   LogAndSetEnv("ramdisk_image_path", config_->final_ramdisk_path());
-  LogAndSetEnv("kernel_cmdline", config_->kernel_cmdline_as_string());
+  LogAndSetEnv("kernel_cmdline", kernel_cmdline_);
   LogAndSetEnv("virtual_disk_paths", JoinString(config_->virtual_disk_paths(),
                                                 ";"));
   LogAndSetEnv("wifi_tap_name", config_->wifi_tap_name());
